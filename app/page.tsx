@@ -1,103 +1,278 @@
-import Image from "next/image";
+import { Navbar } from "@/components/navbar"
+import { Footer } from "@/components/footer"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Mic, FileText, Zap, Shield, Clock, TrendingUp } from "lucide-react"
+import Link from "next/link"
 
-export default function Home() {
+export default function LandingPage() {
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="flex min-h-screen flex-col">
+      <Navbar />
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+      {/* Hero Section */}
+      <section className="relative flex flex-1 items-center justify-center px-4 py-20 md:py-32">
+        <div className="container mx-auto max-w-5xl text-center">
+          <div className="mb-6 inline-block rounded-full border border-border bg-secondary px-4 py-1.5 text-sm text-muted-foreground">
+            AI-Powered Estimating
+          </div>
+          <h1 className="mb-6 text-balance text-4xl font-bold tracking-tight md:text-6xl lg:text-7xl">
+            Voice Your Vision.
+            <br />
+            <span className="text-muted-foreground">Get Instant Estimates.</span>
+          </h1>
+          <p className="mx-auto mb-8 max-w-2xl text-pretty text-lg text-muted-foreground md:text-xl">
+            Estimatix transforms how contractors create project estimates. Simply describe your project by voice, and
+            our AI generates detailed, accurate estimates in seconds.
+          </p>
+          <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
+            <Button asChild size="lg" className="w-full sm:w-auto">
+              <Link href="/dashboard">Get Started</Link>
+            </Button>
+            <Button asChild variant="outline" size="lg" className="w-full sm:w-auto bg-transparent">
+              <Link href="#features">Learn More</Link>
+            </Button>
+          </div>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      </section>
+
+      {/* Features Section */}
+      <section id="features" className="border-t border-border px-4 py-20">
+        <div className="container mx-auto max-w-6xl">
+          <div className="mb-12 text-center">
+            <h2 className="mb-4 text-balance text-3xl font-bold md:text-4xl">Built for Modern Contractors</h2>
+            <p className="mx-auto max-w-2xl text-pretty text-muted-foreground">
+              Everything you need to create professional estimates faster than ever before.
+            </p>
+          </div>
+
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            <Card>
+              <CardHeader>
+                <Mic className="mb-2 h-10 w-10" />
+                <CardTitle>Voice Recording</CardTitle>
+                <CardDescription>
+                  Describe your project naturally. Our AI understands construction terminology and context.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <Zap className="mb-2 h-10 w-10" />
+                <CardTitle>Instant Generation</CardTitle>
+                <CardDescription>
+                  Get detailed estimates in seconds, not hours. AI-powered analysis of materials, labor, and costs.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <FileText className="mb-2 h-10 w-10" />
+                <CardTitle>Professional Output</CardTitle>
+                <CardDescription>
+                  Export polished, client-ready estimates with itemized breakdowns and totals.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <Clock className="mb-2 h-10 w-10" />
+                <CardTitle>Save Time</CardTitle>
+                <CardDescription>
+                  Reduce estimate creation time by 90%. Spend more time building, less time calculating.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <Shield className="mb-2 h-10 w-10" />
+                <CardTitle>Accurate Pricing</CardTitle>
+                <CardDescription>
+                  AI trained on real construction data ensures competitive and realistic pricing.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <TrendingUp className="mb-2 h-10 w-10" />
+                <CardTitle>Win More Bids</CardTitle>
+                <CardDescription>
+                  Respond to opportunities faster with professional estimates that impress clients.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          </div>
+        </div>
+      </section>
+
+      {/* Pricing Section */}
+      <section id="pricing" className="border-t border-border px-4 py-20">
+        <div className="container mx-auto max-w-6xl">
+          <div className="mb-12 text-center">
+            <h2 className="mb-4 text-balance text-3xl font-bold md:text-4xl">Simple, Transparent Pricing</h2>
+            <p className="mx-auto max-w-2xl text-pretty text-muted-foreground">
+              Choose the plan that fits your business. All plans include core features.
+            </p>
+          </div>
+
+          <div className="grid gap-6 md:grid-cols-3">
+            <Card>
+              <CardHeader>
+                <CardTitle>Starter</CardTitle>
+                <CardDescription>Perfect for solo contractors</CardDescription>
+                <div className="mt-4">
+                  <span className="text-4xl font-bold">$29</span>
+                  <span className="text-muted-foreground">/month</span>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li>✓ 50 estimates per month</li>
+                  <li>✓ Voice recording</li>
+                  <li>✓ PDF export</li>
+                  <li>✓ Email support</li>
+                </ul>
+                <Button className="mt-6 w-full bg-transparent" variant="outline">
+                  Get Started
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card className="border-primary">
+              <CardHeader>
+                <div className="mb-2 inline-block rounded-full bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground">
+                  POPULAR
+                </div>
+                <CardTitle>Professional</CardTitle>
+                <CardDescription>For growing businesses</CardDescription>
+                <div className="mt-4">
+                  <span className="text-4xl font-bold">$79</span>
+                  <span className="text-muted-foreground">/month</span>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li>✓ Unlimited estimates</li>
+                  <li>✓ Voice recording</li>
+                  <li>✓ PDF & Excel export</li>
+                  <li>✓ Priority support</li>
+                  <li>✓ Custom branding</li>
+                </ul>
+                <Button className="mt-6 w-full">Get Started</Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Enterprise</CardTitle>
+                <CardDescription>For large teams</CardDescription>
+                <div className="mt-4">
+                  <span className="text-4xl font-bold">Custom</span>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li>✓ Everything in Professional</li>
+                  <li>✓ Team collaboration</li>
+                  <li>✓ API access</li>
+                  <li>✓ Dedicated support</li>
+                  <li>✓ Custom integrations</li>
+                </ul>
+                <Button className="mt-6 w-full bg-transparent" variant="outline">
+                  Contact Sales
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ Section */}
+      <section id="faq" className="border-t border-border px-4 py-20">
+        <div className="container mx-auto max-w-3xl">
+          <div className="mb-12 text-center">
+            <h2 className="mb-4 text-balance text-3xl font-bold md:text-4xl">Frequently Asked Questions</h2>
+          </div>
+
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">How accurate are the AI-generated estimates?</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground">
+                  Our AI is trained on thousands of real construction projects and pricing data. While estimates provide
+                  a strong baseline, we always recommend reviewing and adjusting based on your specific market
+                  conditions and expertise.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Can I edit the generated estimates?</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground">
+                  All estimates are fully editable. The AI provides a starting point, and you have complete control to
+                  adjust quantities, pricing, and line items.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">What types of projects does Estimatix support?</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground">
+                  Estimatix works with residential and commercial projects including remodeling, new construction,
+                  electrical, plumbing, HVAC, and more. Our AI understands a wide range of construction trades.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Is my data secure?</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground">
+                  Yes. We use enterprise-grade encryption and security practices. Your project data and estimates are
+                  private and never shared with third parties.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </section>
+
+      {/* CTA Section */}
+      <section className="border-t border-border px-4 py-20">
+        <div className="container mx-auto max-w-4xl text-center">
+          <h2 className="mb-4 text-balance text-3xl font-bold md:text-4xl">Ready to Transform Your Estimating?</h2>
+          <p className="mb-8 text-pretty text-lg text-muted-foreground">
+            Join hundreds of contractors saving time and winning more bids with Estimatix.
+          </p>
+          <Button asChild size="lg">
+            <Link href="/dashboard">Start Free Trial</Link>
+          </Button>
+        </div>
+      </section>
+
+      {/* Sticky Mobile CTA */}
+      <div className="fixed bottom-0 left-0 right-0 border-t border-border bg-background p-4 md:hidden">
+        <Button asChild className="w-full" size="lg">
+          <Link href="/dashboard">Get Started Free</Link>
+        </Button>
+      </div>
+
+      <Footer />
     </div>
-  );
+  )
 }

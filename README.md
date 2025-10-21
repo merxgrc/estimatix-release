@@ -1,36 +1,112 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Estimatix - AI-Assisted Contractor Estimating
+
+A modern, mobile-first PWA for contractors to generate accurate project estimates through voice recording powered by AI.
+
+## Features
+
+- 🎤 Voice-to-text recording for project descriptions
+- 🤖 AI-powered estimate generation
+- 📱 Mobile-first, responsive design
+- 🎨 Clean, professional SaaS interface
+- ♿ Keyboard navigation and accessibility support
+- 📊 Detailed estimate breakdowns with export options
+
+## Tech Stack
+
+- **Framework:** Next.js 14 (App Router)
+- **Language:** TypeScript
+- **Styling:** Tailwind CSS v4
+- **UI Components:** shadcn/ui
+- **Icons:** Lucide React
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
 
-```bash
+- Node.js 18+ installed
+- npm or yarn package manager
+
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+
+\`\`\`bash
+npm install
+\`\`\`
+
+3. Run the development server:
+
+\`\`\`bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+\`\`\`
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+4. Open [http://localhost:3000](http://localhost:3000) in your browser
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Project Structure
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+\`\`\`
+├── app/
+│   ├── page.tsx              # Landing page
+│   ├── dashboard/page.tsx    # Projects dashboard
+│   ├── record/page.tsx       # Voice recording interface
+│   ├── layout.tsx            # Root layout
+│   └── globals.css           # Global styles
+├── components/
+│   ├── navbar.tsx            # Marketing navbar
+│   ├── footer.tsx            # Footer component
+│   ├── sidebar.tsx           # Dashboard sidebar
+│   ├── recording-interface.tsx # Recording UI
+│   └── ui/                   # shadcn/ui components
+└── public/
+    └── manifest.json         # PWA manifest
+\`\`\`
 
-## Learn More
+## TODO: Backend Integration
 
-To learn more about Next.js, take a look at the following resources:
+The following features require backend implementation:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Authentication
+- [ ] Implement Supabase authentication
+- [ ] Add login/signup pages
+- [ ] Protect dashboard and record routes
+- [ ] Add user session management
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Database (Supabase)
+- [ ] Create projects table schema
+- [ ] Create estimates table schema
+- [ ] Implement CRUD operations for projects
+- [ ] Add user-project relationships
 
-## Deploy on Vercel
+### AI Integration
+- [ ] Set up AI SDK for estimate generation
+- [ ] Create `/api/generate-estimate` endpoint
+- [ ] Implement voice-to-text with Web Speech API
+- [ ] Add AI model for parsing construction data
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### PWA Features
+- [ ] Create service worker for offline support
+- [ ] Add app icons (192x192, 512x512)
+- [ ] Implement caching strategy
+- [ ] Add install prompt
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Additional Features
+- [ ] PDF export functionality
+- [ ] Excel export functionality
+- [ ] Email estimates to clients
+- [ ] Project templates
+- [ ] Cost database integration
+
+## Accessibility
+
+This app follows WCAG 2.1 Level AA guidelines:
+
+- Semantic HTML elements
+- ARIA labels and roles
+- Keyboard navigation support
+- Screen reader friendly
+- Sufficient color contrast
+
+## License
+
+MIT
