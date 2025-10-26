@@ -38,25 +38,6 @@ npm run dev
 
 4. Open [http://localhost:3000](http://localhost:3000) in your browser
 
-## Project Structure
-
-\`\`\`
-├── app/
-│   ├── page.tsx              # Landing page
-│   ├── dashboard/page.tsx    # Projects dashboard
-│   ├── record/page.tsx       # Voice recording interface
-│   ├── layout.tsx            # Root layout
-│   └── globals.css           # Global styles
-├── components/
-│   ├── navbar.tsx            # Marketing navbar
-│   ├── footer.tsx            # Footer component
-│   ├── sidebar.tsx           # Dashboard sidebar
-│   ├── recording-interface.tsx # Recording UI
-│   └── ui/                   # shadcn/ui components
-└── public/
-    └── manifest.json         # PWA manifest
-\`\`\`
-
 ## TODO: Backend Integration
 
 The following features require backend implementation:
