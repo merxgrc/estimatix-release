@@ -29,7 +29,8 @@ A modern, mobile-first PWA for contractors to generate accurate project estimate
 ### Installation
 2. Install dependencies:
 
-\`\`\`bash
+\`\`\`
+bash
 3. Run the development server:
 
 \`\`\`bash
