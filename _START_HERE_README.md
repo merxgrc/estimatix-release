@@ -27,14 +27,9 @@ A modern, mobile-first PWA for contractors to generate accurate project estimate
 - npm or yarn package manager
 
 ### Installation
-
-1. Clone the repository
 2. Install dependencies:
 
 \`\`\`bash
-npm install
-\`\`\`
-
 3. Run the development server:
 
 \`\`\`bash
