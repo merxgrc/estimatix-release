@@ -9,7 +9,7 @@ const DimensionSchema = z.object({
   unit: z.enum(['in', 'ft', 'cm', 'm']),
   width: z.number().positive(),
   height: z.number().positive(),
-  depth: z.number().positive().optional()
+  depth: z.number().nullable().optional()
 })
 
 const LineItemSchema = z.object({
