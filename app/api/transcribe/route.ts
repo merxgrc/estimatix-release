@@ -76,3 +76,5 @@ async function transcribeWithOpenAI(audioFile: File, apiKey: string): Promise<st
   const result = await response.json()
   return result.text || 'No transcription available'
 }
+
+

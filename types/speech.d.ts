@@ -64,3 +64,5 @@ interface WakeLockSentinel {
 interface Navigator {
   wakeLock?: WakeLock
 }
+
+
