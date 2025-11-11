@@ -19,7 +19,7 @@ const LineItemSchema = z.object({
   dimensions: DimensionSchema.nullable().optional(),
   unit_cost: z.number().positive().nullable().optional(),
   total: z.number().positive().nullable().optional(),
-  notes: z.string().optional()
+  notes: z.string().optional().nullable()
 })
 
 const ParseResultSchema = z.object({
