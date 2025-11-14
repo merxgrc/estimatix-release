@@ -13,16 +13,21 @@ export function AuthGuard({ children, requireAuth = true }: AuthGuardProps) {
   const { user, loading } = useAuth()
   const router = useRouter()
 
+  // 1. Hooks MUST run before any returns
   useEffect(() => {
     if (!loading) {
       if (requireAuth && !user) {
         router.push('/auth/login')
-      } else if (!requireAuth && user) {
+      }
+      if (!requireAuth && user) {
         router.push('/dashboard')
       }
     }
   }, [user, loading, requireAuth, router])
 
+  // 2. AFTER all hooks, we can safely return UI
+
+  // Still loading session
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -31,15 +36,24 @@ export function AuthGuard({ children, requireAuth = true }: AuthGuardProps) {
     )
   }
 
+  // Protected pages → user required
   if (requireAuth && !user) {
-    return null // Will redirect
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        Redirecting...
+      </div>
+    )
   }
 
+  // Public pages → user NOT allowed (login/signup/etc)
   if (!requireAuth && user) {
-    return null // Will redirect
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        Redirecting...
+      </div>
+    )
   }
 
+  // Allowed to see the page
   return <>{children}</>
 }
-
-

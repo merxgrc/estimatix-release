@@ -10,6 +10,10 @@ import { AuthGuard } from '@/components/auth-guard'
 import { supabase } from '@/lib/supabase/client'
 
 export default function SignupPage() {
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [companyName, setCompanyName] = useState('')
+  const [trade, setTrade] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -32,8 +36,39 @@ export default function SignupPage() {
     setError('')
     setMessage('')
 
-    if (password !== confirmPassword) {
-      setError('Passwords do not match')
+    // Validate all required fields
+    if (!firstName.trim()) {
+      setError('First name is required')
+      setLoading(false)
+      return
+    }
+
+    if (!lastName.trim()) {
+      setError('Last name is required')
+      setLoading(false)
+      return
+    }
+
+    if (!companyName.trim()) {
+      setError('Company name is required')
+      setLoading(false)
+      return
+    }
+
+    if (!trade.trim()) {
+      setError('Trade is required')
+      setLoading(false)
+      return
+    }
+
+    if (!email.trim()) {
+      setError('Email is required')
+      setLoading(false)
+      return
+    }
+
+    if (!password) {
+      setError('Password is required')
       setLoading(false)
       return
     }
@@ -44,21 +79,60 @@ export default function SignupPage() {
       return
     }
 
+    if (password !== confirmPassword) {
+      setError('Passwords do not match')
+      setLoading(false)
+      return
+    }
+
     try {
-      const { error } = await supabase.auth.signUp({
+      // Create the auth user and attach metadata
+      const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          data: {
+            first_name: firstName.trim(),
+            last_name: lastName.trim(),
+            company_name: companyName.trim(),
+            trade: trade.trim(),
+          },
+        },
       })
 
-      if (error) {
-        setError(error.message)
-      } else {
-        setMessage('Check your email for a confirmation link!')
-        // Optionally redirect to login after successful signup
-        setTimeout(() => {
-          router.push('/auth/login')
-        }, 2000)
+      if (signUpError) {
+        setError(signUpError.message)
+        setLoading(false)
+        return
       }
+
+      // Guard against unexpected cases where Supabase returns no user record
+      if (!data?.user) {
+        setError('Signup succeeded, but no user information was returned.')
+        setLoading(false)
+        return
+      }
+
+      // Insert the matching profile row so the rest of the app can find user data
+      const { error: profileError } = await supabase.from('profiles').insert({
+        user_id: data.user.id,
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        company_name: companyName.trim(),
+        trade: trade.trim(),
+      })
+
+      if (profileError) {
+        setError(profileError.message)
+        setLoading(false)
+        return
+      }
+
+      setMessage('Check your email for a confirmation link!')
+      // Optionally redirect to login after successful signup
+      setTimeout(() => {
+        router.push('/auth/login')
+      }, 2000)
     } catch (err) {
       setError('An unexpected error occurred')
     } finally {
@@ -104,8 +178,75 @@ export default function SignupPage() {
               )}
               
               <div>
+                <label htmlFor="firstName" className="block text-sm font-medium text-gray-700">
+                  First name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="firstName"
+                  name="firstName"
+                  type="text"
+                  autoComplete="given-name"
+                  required
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="Enter your first name"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="lastName" className="block text-sm font-medium text-gray-700">
+                  Last name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="lastName"
+                  name="lastName"
+                  type="text"
+                  autoComplete="family-name"
+                  required
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="Enter your last name"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="companyName" className="block text-sm font-medium text-gray-700">
+                  Company name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="companyName"
+                  name="companyName"
+                  type="text"
+                  autoComplete="organization"
+                  required
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="Enter your company name"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="trade" className="block text-sm font-medium text-gray-700">
+                  Trade <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="trade"
+                  name="trade"
+                  type="text"
+                  required
+                  value={trade}
+                  onChange={(e) => setTrade(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="Enter your trade"
+                />
+              </div>
+              
+              <div>
                 <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                  Email address
+                  Email address <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="email"
@@ -122,7 +263,7 @@ export default function SignupPage() {
               
               <div>
                 <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                  Password
+                  Password <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="password"
@@ -139,7 +280,7 @@ export default function SignupPage() {
               
               <div>
                 <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700">
-                  Confirm Password
+                  Confirm Password <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="confirmPassword"
