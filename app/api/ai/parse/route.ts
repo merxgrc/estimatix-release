@@ -20,11 +20,26 @@ const SpecSectionSchema = z.object({
   notes: z.string().nullable().optional(),
 })
 
-// Combined parse result schema - line_items as simple strings
+// Structured line item schema (for AI to parse)
+const StructuredLineItemSchema = z.object({
+  description: z.string(),
+  category: z.enum(['Windows', 'Doors', 'Cabinets', 'Flooring', 'Plumbing', 'Electrical', 'Other']).optional(),
+  quantity: z.number().optional(),
+  unit_cost: z.number().nullable().optional(),
+  total: z.number().nullable().optional(),
+  cost_code: z.string().optional(),
+  room: z.string().optional(),
+  notes: z.string().optional(),
+})
+
+// Combined parse result schema - line_items can be strings OR structured objects
 const ParseResultSchema = z.object({
   projectId: z.string(),
   spec_sections: z.array(SpecSectionSchema),
-  line_items: z.array(z.string()), // Simple string array for pricing
+  line_items: z.array(z.union([
+    z.string(), // Backward compatible: simple strings
+    StructuredLineItemSchema // New: structured objects with quantities, costs, etc.
+  ])),
   assumptions: z.array(z.string()).optional(),
   missing_info: z.array(z.string()).optional()
 })
@@ -96,25 +111,48 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Process line items - handle both string and structured formats
+    const processedItems = parseResult.line_items.map((item) => {
+      // If it's already a structured object, use it
+      if (typeof item === 'object' && item !== null) {
+        return {
+          category: (item.category || 'Other') as 'Windows' | 'Doors' | 'Cabinets' | 'Flooring' | 'Plumbing' | 'Electrical' | 'Other',
+          description: item.description || '',
+          quantity: item.quantity ?? 1,
+          dimensions: null,
+          unit_cost: item.unit_cost ?? undefined,
+          total: item.total ?? (item.quantity && item.unit_cost ? item.quantity * item.unit_cost : undefined),
+          notes: item.notes || null
+        }
+      }
+      // If it's a string, parse it or use defaults
+      return {
+        category: 'Other' as const,
+        description: typeof item === 'string' ? item : '',
+        quantity: 1,
+        dimensions: null,
+        unit_cost: undefined,
+        total: undefined,
+        notes: null
+      }
+    })
+
+    // Calculate total from all items
+    const calculatedTotal = processedItems.reduce((sum, item) => {
+      return sum + (item.total || 0)
+    }, 0)
+
     // Prepare data for insert/update
     const estimateData = {
       project_id: projectId,
       spec_sections: enrichedSections,
       json_data: {
-        items: parseResult.line_items.map((item, index) => ({
-          category: 'Other',
-          description: item,
-          quantity: 1,
-          dimensions: null,
-          unit_cost: null,
-          total: null,
-          notes: null
-        })),
+        items: processedItems,
         assumptions: parseResult.assumptions || [],
         missing_info: parseResult.missing_info || []
       },
       ai_summary: `Parsed ${enrichedSections.length} specification sections and ${parseResult.line_items.length} line items from transcript`,
-      total: 0 // Will be calculated when costs are added
+      total: calculatedTotal || 0
     }
 
     let estimateId: string
@@ -171,14 +209,14 @@ export async function POST(req: NextRequest) {
       success: true,
       data: {
         spec_sections: enrichedSections,
-        items: parseResult.line_items.map((item, index) => ({
-          category: 'Other' as const,
-          description: item,
-          quantity: 1,
-          dimensions: null,
-          unit_cost: undefined,
-          total: undefined,
-          notes: ''
+        items: processedItems.map((item) => ({
+          category: item.category,
+          description: item.description,
+          quantity: item.quantity,
+          dimensions: item.dimensions,
+          unit_cost: item.unit_cost,
+          total: item.total,
+          notes: item.notes || ''
         }))
       },
       estimateId: estimateId
@@ -209,30 +247,42 @@ function normalizeAllowances(sections: any[]): any[] {
 }
 
 // Enrich spec sections with items from line_items if they're empty
-function enrichSpecSections(sections: any[], lineItems: string[]): any[] {
+function enrichSpecSections(sections: any[], lineItems: (string | any)[]): any[] {
   return sections.map(section => {
     // If section has no items, try to populate from line_items
     if (section.items.length === 0 && lineItems.length > 0) {
+      // Convert line items to strings for matching
+      const lineItemStrings = lineItems.map(item => {
+        if (typeof item === 'string') return item.toLowerCase()
+        return (item.description || '').toLowerCase()
+      })
+      
       // Find line items that might belong to this category
       const categoryKeywords = section.title.toLowerCase()
-      const relevantItems = lineItems.filter(item => 
-        item.toLowerCase().includes(categoryKeywords) ||
-        item.toLowerCase().includes(section.code)
-      )
+      const relevantItems = lineItems.filter((item, index) => {
+        const itemStr = lineItemStrings[index]
+        return itemStr.includes(categoryKeywords) || itemStr.includes(section.code)
+      })
       
       if (relevantItems.length > 0) {
-        section.items = relevantItems.map(item => ({
-          text: item,
-          label: null,
-          subitems: []
-        }))
+        section.items = relevantItems.map(item => {
+          const description = typeof item === 'string' ? item : (item.description || '')
+          return {
+            text: description,
+            label: null,
+            subitems: []
+          }
+        })
       } else {
         // If no matches, at least add the first few line items
-        section.items = lineItems.slice(0, 3).map(item => ({
-          text: item,
-          label: null,
-          subitems: []
-        }))
+        section.items = lineItems.slice(0, 3).map(item => {
+          const description = typeof item === 'string' ? item : (item.description || '')
+          return {
+            text: description,
+            label: null,
+            subitems: []
+          }
+        })
       }
     }
     
@@ -254,11 +304,68 @@ async function parseTranscriptWithAI(
   projectId: string,
   apiKey: string
 ): Promise<ParseResult> {
-  const prompt = `You convert contractor speech into TWO outputs:
-1. line_items: short, simple, per-action items (used for pricing).
-2. spec_sections: formatted specification sections for the PDF.
+  const prompt = `You are a professional construction estimator. Convert contractor speech into structured, detailed line items with quantities, costs, categories, and cost codes.
 
-You MUST produce both.
+CRITICAL RULES:
+1. ALWAYS extract quantities from spoken numbers (e.g., "seven windows" → quantity: 7, "three doors" → quantity: 3)
+2. ALWAYS extract unit costs from price mentions (e.g., "$100 each" → unit_cost: 100, "fifty dollars per" → unit_cost: 50)
+3. ALWAYS calculate total = quantity × unit_cost when both are available
+4. ALWAYS assign correct categories: Windows, Doors, Cabinets, Flooring, Plumbing, Electrical, or Other
+5. ALWAYS map categories to cost codes: Windows=520, Doors=530, Cabinets=640, Flooring=960, Plumbing=404, Electrical=405, Other=999
+6. ALWAYS detect room names (Kitchen, Bathroom, Bedroom, Living Room, etc.) or use "General" if not specified
+7. NEVER combine multiple items into one line - separate them
+8. NEVER output unstructured merged descriptions like "Replace seven windows at $100 each"
+9. ALWAYS output structured objects with separate fields for quantity, unit_cost, total, category, etc.
+
+CATEGORY MAPPING:
+- Windows, window, windows → category: "Windows", cost_code: "520"
+- Door, doors → category: "Doors", cost_code: "530"
+- Cabinet, cabinets, cabinetry → category: "Cabinets", cost_code: "640"
+- Floor, flooring, floor covering → category: "Flooring", cost_code: "960"
+- Plumbing, plumb, pipe, fixture → category: "Plumbing", cost_code: "404"
+- Electrical, wire, outlet, switch, light → category: "Electrical", cost_code: "405"
+- Demo, demolition, remove, tear out → category: "Other", cost_code: "201"
+- Paint, painting → category: "Other", cost_code: "990"
+- Default → category: "Other", cost_code: "999"
+
+NUMBER CONVERSION EXAMPLES:
+- "one" → 1, "two" → 2, "three" → 3, "four" → 4, "five" → 5
+- "six" → 6, "seven" → 7, "eight" → 8, "nine" → 9, "ten" → 10
+- "eleven" → 11, "twelve" → 12, "thirteen" → 13, "fourteen" → 14, "fifteen" → 15
+- "twenty" → 20, "thirty" → 30, "fifty" → 50, "one hundred" → 100
+
+COST EXTRACTION EXAMPLES:
+- "$100 each" → unit_cost: 100
+- "one hundred dollars per" → unit_cost: 100
+- "$50 per unit" → unit_cost: 50
+- "fifty dollars each" → unit_cost: 50
+- "$25/square foot" → unit_cost: 25 (note: "per square foot" in notes)
+
+ROOM DETECTION:
+- "kitchen" → room: "Kitchen"
+- "bathroom" → room: "Bathroom"
+- "bedroom" → room: "Bedroom"
+- "living room" → room: "Living Room"
+- "family room" → room: "Family Room"
+- If no room mentioned → room: "General"
+
+EXAMPLE INPUT: "Replace seven windows at one hundred dollars each in the kitchen"
+
+EXAMPLE OUTPUT:
+{
+  "line_items": [
+    {
+      "description": "Replace window",
+      "category": "Windows",
+      "quantity": 7,
+      "unit_cost": 100,
+      "total": 700,
+      "cost_code": "520",
+      "room": "Kitchen",
+      "notes": ""
+    }
+  ]
+}
 
 For spec_sections:
 - Detect categories like DEMO, FRAMING, PLUMBING, ELECTRICAL, HVAC, WINDOWS, STUCCO, CABINETRY, COUNTERTOPS, FLOORING, TILE, PAINT.
@@ -271,32 +378,22 @@ For spec_sections:
 - Never leave allowances null if mentioned.
 - Never output empty sections.
 
-For line_items:
-- Each actionable statement becomes a simple, flat line item string.
-- These must always be populated even if spec_sections is empty.
-- Examples: "Remove existing kitchen cabinets", "Install new plumbing fixtures", "Wire electrical outlets"
-
 PROJECT DESCRIPTION:
 ${transcript}
 
-Return ONLY valid JSON matching this exact schema:
+Return ONLY valid JSON matching this exact schema. You MUST use structured objects for line_items:
 {
   "projectId": "${projectId}",
   "spec_sections": [
     {
-      "code": "201",
-      "title": "DEMO",
+      "code": "520",
+      "title": "WINDOWS",
       "allowance": null,
       "items": [
         {
-          "text": "Remove existing kitchen cabinets",
+          "text": "Replace window",
           "label": null,
           "subitems": []
-        },
-        {
-          "text": null,
-          "label": "Family room",
-          "subitems": ["Remove carpet", "Remove baseboards"]
         }
       ],
       "subcontractor": null,
@@ -304,16 +401,27 @@ Return ONLY valid JSON matching this exact schema:
     }
   ],
   "line_items": [
-    "Remove existing kitchen cabinets",
-    "Remove carpet from family room",
-    "Remove baseboards from family room",
-    "Install new kitchen cabinets"
+    {
+      "description": "Replace window",
+      "category": "Windows",
+      "quantity": 7,
+      "unit_cost": 100,
+      "total": 700,
+      "cost_code": "520",
+      "room": "Kitchen",
+      "notes": ""
+    }
   ],
   "assumptions": ["Assumptions made during estimation"],
   "missing_info": ["Information that needs clarification"]
 }
 
-Be precise and conservative. If any information is unclear, add it to missing_info rather than guessing.`
+IMPORTANT: 
+- line_items MUST be an array of structured objects, NOT strings
+- Each object MUST have description, category, quantity, unit_cost, total
+- Extract ALL numbers and costs from the speech
+- Separate multiple items into individual line items
+- Be precise and conservative. If any information is unclear, add it to missing_info rather than guessing.`
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -326,7 +434,7 @@ Be precise and conservative. If any information is unclear, add it to missing_in
       messages: [
         {
           role: 'system',
-          content: 'You are a construction estimator assistant. Convert natural spoken construction descriptions into structured specifications. You MUST output both line_items (array of strings) and spec_sections (array of sections). Never leave items empty. Never leave allowances null if mentioned. Return only valid JSON matching the exact schema provided. Always include projectId in your response.'
+          content: 'You are a professional construction estimator AI. Your task is to parse contractor speech into structured line items with quantities, unit costs, totals, categories, cost codes, and rooms. You MUST extract all numerical values (quantities, prices) from spoken text. Convert number words to digits. Calculate totals automatically. Assign correct categories and cost codes. Detect room names or use "General". Separate multiple items into individual line items. NEVER combine items into unstructured descriptions. ALWAYS output line_items as an array of structured objects (NOT strings) with description, category, quantity, unit_cost, total, cost_code, and room fields. Return only valid JSON matching the exact schema. Never leave items empty. Never leave allowances null if mentioned. Always include projectId in your response.'
         },
         {
           role: 'user',
@@ -361,11 +469,48 @@ Be precise and conservative. If any information is unclear, add it to missing_in
     // Log parsed JSON
     console.log('AI PARSED JSON:', JSON.stringify(parsed, null, 2))
     
+    // Validate with Zod schema
     const validated = ParseResultSchema.parse(parsed)
-    return validated
+    
+    // Ensure line_items are properly formatted (handle both string and object formats)
+    const normalizedLineItems = validated.line_items.map(item => {
+      if (typeof item === 'string') {
+        // Keep as string for backward compatibility
+        return item
+      }
+      // Ensure structured objects have required fields
+      if (item && typeof item === 'object') {
+        return {
+          description: item.description || '',
+          category: item.category || 'Other',
+          quantity: item.quantity ?? 1,
+          unit_cost: item.unit_cost ?? null,
+          total: item.total ?? (item.quantity && item.unit_cost ? item.quantity * item.unit_cost : null),
+          cost_code: item.cost_code || '',
+          room: item.room || 'General',
+          notes: item.notes || ''
+        }
+      }
+      return item
+    })
+    
+    return {
+      ...validated,
+      line_items: normalizedLineItems
+    }
   } catch (parseError) {
     console.error('JSON parse/validation error:', parseError)
     console.error('Raw content:', content)
-    throw new Error('Failed to parse OpenAI response as valid JSON matching the schema')
+    
+    // Fallback: return safe empty structure instead of throwing
+    // This prevents breaking the UI if AI returns bad JSON
+    console.warn('Falling back to safe empty structure due to parse error')
+    return {
+      projectId: projectId,
+      spec_sections: [],
+      line_items: [],
+      assumptions: [],
+      missing_info: ['Failed to parse AI response. Please try again or add items manually.']
+    }
   }
 }
