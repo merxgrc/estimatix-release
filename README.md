@@ -2,15 +2,6 @@
 
 A modern, mobile-first PWA for contractors to generate accurate project estimates through voice recording powered by AI.
 
-## Features
-
-- 🎤 Voice-to-text recording for project descriptions
-- 🤖 AI-powered estimate generation
-- 📱 Mobile-first, responsive design
-- 🎨 Clean, professional SaaS interface
-- ♿ Keyboard navigation and accessibility support
-- 📊 Detailed estimate breakdowns with export options
-
 ## Tech Stack
 
 - **Framework:** Next.js 14 (App Router)
@@ -19,71 +10,44 @@ A modern, mobile-first PWA for contractors to generate accurate project estimate
 - **UI Components:** shadcn/ui
 - **Icons:** Lucide React
 
-## Getting Started
 
-### Prerequisites
+## For Developers:
+### Set up your development environment:
+1. **Make sure you have the following installed.**
+- macOS run the following command:  
+`brew install node`
+- linux run the following command:  
+`sudo apt update`  
+`sudo apt install nodejs npm`
+- windows:  
+`https://nodejs.org/`
+2. **Clone this repository on your local development machine.**
+- ssh:  
+`git clone git@github.com:merxgrc/estimatix.git`
+- HTTP:  
+`git clone https://github.com/merxgrc/estimatix.git`
+3. **Move into your project directory**  
+`cd estimatix`
+4. **Set up the environment variables**
+- Make a file called .env.local.
+- Use .env.local.template as a template.
+- Ask Marcos for the env vars.
+- NEVER COMMIT .env.local or any env vars or secrets to git/github
+5. **Install dependencies**  
+`npm install`
+6. **Run the app locally**
+- build:  
+`npm build`
+- start dev server:  
+`npm run dev`
 
-- Node.js 18+ installed
-- npm or yarn package manager
+### Contributing
+1. **Find an open issue**
+2. **Create a feature branch on your local machine**  
+`git checkout -b feature/your-feature-name`
+3. **Commit and push to your feature branch**  
+`git add .` or `git add filename`  
+`git commit -m "feat: describe your change"`
+4. **Open a pull request**  
+Follow the PR template and request review.
 
-### Installation
-2. Install dependencies:
-
-\`\`\`
-bash
-3. Run the development server:
-
-\`\`\`bash
-npm run dev
-\`\`\`
-
-4. Open [http://localhost:3000](http://localhost:3000) in your browser
-
-## TODO: Backend Integration
-
-The following features require backend implementation:
-
-### Authentication
-- [ ] Implement Supabase authentication
-- [ ] Add login/signup pages
-- [ ] Protect dashboard and record routes
-- [ ] Add user session management
-
-### Database (Supabase)
-- [ ] Create projects table schema
-- [ ] Create estimates table schema
-- [ ] Implement CRUD operations for projects
-- [ ] Add user-project relationships
-
-### AI Integration
-- [ ] Set up AI SDK for estimate generation
-- [ ] Create `/api/generate-estimate` endpoint
-- [ ] Implement voice-to-text with Web Speech API
-- [ ] Add AI model for parsing construction data
-
-### PWA Features
-- [ ] Create service worker for offline support
-- [ ] Add app icons (192x192, 512x512)
-- [ ] Implement caching strategy
-- [ ] Add install prompt
-
-### Additional Features
-- [ ] PDF export functionality
-- [ ] Excel export functionality
-- [ ] Email estimates to clients
-- [ ] Project templates
-- [ ] Cost database integration
-
-## Accessibility
-
-This app follows WCAG 2.1 Level AA guidelines:
-
-- Semantic HTML elements
-- ARIA labels and roles
-- Keyboard navigation support
-- Screen reader friendly
-- Sufficient color contrast
-
-## License
-
-MIT
