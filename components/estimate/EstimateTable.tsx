@@ -48,6 +48,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave }: Es
   const [error, setError] = useState<string | null>(null)
   const [isGeneratingProposal, setIsGeneratingProposal] = useState(false)
   const [proposalUrl, setProposalUrl] = useState<string | null>(null)
+  const [blockedActionMessage, setBlockedActionMessage] = useState<string | null>(null)
   const { user } = useAuth()
 
   // Auto-compute totals when items change
@@ -104,6 +105,14 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave }: Es
   const grandTotal = items.reduce((sum, item) => sum + (item.total || 0), 0)
 
   const saveEstimate = async () => {
+    const hasItems = items.length > 0
+
+    if (!hasItems) {
+      setBlockedActionMessage('Create an estimate first by using the record feature or by adding line items manually.')
+      setTimeout(() => setBlockedActionMessage(null), 5000)
+      return
+    }
+
     if (!user) {
       setError('User not authenticated')
       return
@@ -218,8 +227,17 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave }: Es
   }
 
   const generateProposal = async () => {
+    const hasItems = items.length > 0
+
+    if (!hasItems) {
+      setBlockedActionMessage('Create an estimate first by using the record feature or by adding line items manually.')
+      setTimeout(() => setBlockedActionMessage(null), 5000)
+      return
+    }
+
     if (!estimateId) {
-      setError('Please save the estimate first before generating a proposal')
+      setBlockedActionMessage('Please save the estimate first before generating a proposal.')
+      setTimeout(() => setBlockedActionMessage(null), 5000)
       return
     }
 
@@ -247,8 +265,20 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave }: Es
     }
   }
 
+  const hasItems = items.length > 0
+
   return (
     <div className="space-y-6">
+      {/* Blocked Action Message */}
+      {blockedActionMessage && (
+        <Alert className="border-amber-200 bg-amber-50">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-800">
+            {blockedActionMessage}
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Missing Info Banner */}
       {missingInfo.length > 0 && (
         <Alert className="border-amber-200 bg-amber-50">
@@ -274,29 +304,27 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave }: Es
                 <Plus className="mr-2 h-4 w-4" />
                 Add Item
               </Button>
-              {estimateId && (
-                <Button 
-                  onClick={generateProposal} 
-                  disabled={isGeneratingProposal}
-                  variant="outline"
-                  size="sm"
-                >
-                  {isGeneratingProposal ? (
-                    <>
-                      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                      Generating...
-                    </>
-                  ) : (
-                    <>
-                      <FileText className="mr-2 h-4 w-4" />
-                      Generate Proposal
-                    </>
-                  )}
-                </Button>
-              )}
+              <Button 
+                onClick={generateProposal} 
+                disabled={isGeneratingProposal}
+                variant="outline"
+                size="sm"
+              >
+                {isGeneratingProposal ? (
+                  <>
+                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <FileText className="mr-2 h-4 w-4" />
+                    Generate Proposal
+                  </>
+                )}
+              </Button>
               <Button 
                 onClick={saveEstimate} 
-                disabled={isSaving || items.length === 0}
+                disabled={isSaving}
                 className="bg-green-600 hover:bg-green-700"
               >
                 {isSaving ? (

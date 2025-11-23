@@ -201,8 +201,8 @@ export default function ProjectDetailPage() {
     )
   }
 
-  const activeEstimate = estimates.find(e => e.id === activeEstimateId)
-  const estimateData = activeEstimate?.json_data as any
+  const activeEstimate = activeEstimateId ? estimates.find(e => e.id === activeEstimateId) : null
+  const estimateData = activeEstimate?.json_data as any || { items: [], assumptions: [], missing_info: [] }
 
   return (
     <AuthGuard>
@@ -287,148 +287,122 @@ export default function ProjectDetailPage() {
               )}
             </Card>
 
-            {/* Estimates Section */}
-            {estimates.length > 0 ? (
-              <div className="space-y-4">
-                {estimates.length > 1 && (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-lg">Select Estimate</CardTitle>
-                      <CardDescription>
-                        Choose which estimate to view or edit
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="flex flex-wrap gap-2">
-                        {estimates.map((estimate) => (
-                          <div key={estimate.id} className="flex items-center gap-1">
-                            <Button
-                              variant={activeEstimateId === estimate.id ? "default" : "outline"}
-                              onClick={() => setActiveEstimateId(estimate.id)}
-                              className="flex items-center gap-2"
-                            >
-                              <FileText className="h-4 w-4" />
-                              {new Date(estimate.created_at).toLocaleDateString('en-US', {
-                                month: 'short',
-                                day: 'numeric'
-                              })}
-                              {estimate.total && (
-                                <span className="ml-2">${estimate.total.toLocaleString()}</span>
-                              )}
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteEstimate(estimate.id)}
-                              disabled={deletingEstimateId === estimate.id}
-                              className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                            >
-                              {deletingEstimateId === estimate.id ? (
-                                <div className="h-4 w-4 animate-spin rounded-full border-2 border-destructive border-t-transparent" />
-                              ) : (
-                                <Trash2 className="h-4 w-4" />
-                              )}
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {activeEstimate && (
-                  <div className="space-y-4">
-                    {activeEstimate.ai_summary && (
-                      <Card>
-                        <CardHeader>
-                          <div className="flex items-center justify-between">
-                            <CardTitle className="text-lg">AI Summary</CardTitle>
-                            {estimates.length === 1 && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDeleteEstimate(activeEstimate.id)}
-                                disabled={deletingEstimateId === activeEstimate.id}
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                              >
-                                {deletingEstimateId === activeEstimate.id ? (
-                                  <>
-                                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-destructive border-t-transparent" />
-                                    Deleting...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Trash2 className="mr-2 h-4 w-4" />
-                                    Delete Estimate
-                                  </>
-                                )}
-                              </Button>
+            {/* Estimates Section - Always show the estimate interface */}
+            <div className="space-y-4">
+              {estimates.length > 1 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Select Estimate</CardTitle>
+                    <CardDescription>
+                      Choose which estimate to view or edit
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex flex-wrap gap-2">
+                      {estimates.map((estimate) => (
+                        <div key={estimate.id} className="flex items-center gap-1">
+                          <Button
+                            variant={activeEstimateId === estimate.id ? "default" : "outline"}
+                            onClick={() => setActiveEstimateId(estimate.id)}
+                            className="flex items-center gap-2"
+                          >
+                            <FileText className="h-4 w-4" />
+                            {new Date(estimate.created_at).toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric'
+                            })}
+                            {estimate.total && (
+                              <span className="ml-2">${estimate.total.toLocaleString()}</span>
                             )}
-                          </div>
-                        </CardHeader>
-                        <CardContent>
-                          <p className="text-sm text-muted-foreground">
-                            {activeEstimate.ai_summary}
-                          </p>
-                        </CardContent>
-                      </Card>
-                    )}
-
-                    <div className="relative">
-                      {estimates.length > 1 && (
-                        <div className="absolute top-0 right-0 z-10">
+                          </Button>
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => activeEstimateId && handleDeleteEstimate(activeEstimateId)}
-                            disabled={!activeEstimateId || deletingEstimateId === activeEstimateId}
-                            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => handleDeleteEstimate(estimate.id)}
+                            disabled={deletingEstimateId === estimate.id}
+                            className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
                           >
-                            {deletingEstimateId === activeEstimateId ? (
-                              <>
-                                <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-destructive border-t-transparent" />
-                                Deleting...
-                              </>
+                            {deletingEstimateId === estimate.id ? (
+                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-destructive border-t-transparent" />
                             ) : (
-                              <>
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                Delete Estimate
-                              </>
+                              <Trash2 className="h-4 w-4" />
                             )}
                           </Button>
                         </div>
-                      )}
-                      <EstimateTable
-                        projectId={projectId}
-                        estimateId={activeEstimateId}
-                        initialData={estimateData}
-                        onSave={handleEstimateSave}
-                      />
+                      ))}
                     </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {activeEstimate && activeEstimate.ai_summary && (
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-lg">AI Summary</CardTitle>
+                      {estimates.length === 1 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteEstimate(activeEstimate.id)}
+                          disabled={deletingEstimateId === activeEstimate.id}
+                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                        >
+                          {deletingEstimateId === activeEstimate.id ? (
+                            <>
+                              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-destructive border-t-transparent" />
+                              Deleting...
+                            </>
+                          ) : (
+                            <>
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Delete Estimate
+                            </>
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground">
+                      {activeEstimate.ai_summary}
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+
+              <div className="relative">
+                {estimates.length > 1 && activeEstimateId && (
+                  <div className="absolute top-0 right-0 z-10">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDeleteEstimate(activeEstimateId)}
+                      disabled={deletingEstimateId === activeEstimateId}
+                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    >
+                      {deletingEstimateId === activeEstimateId ? (
+                        <>
+                          <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-destructive border-t-transparent" />
+                          Deleting...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Delete Estimate
+                        </>
+                      )}
+                    </Button>
                   </div>
                 )}
+                <EstimateTable
+                  projectId={projectId}
+                  estimateId={activeEstimateId}
+                  initialData={estimateData || { items: [], assumptions: [], missing_info: [] }}
+                  onSave={handleEstimateSave}
+                />
               </div>
-            ) : (
-              <Card className="mx-auto max-w-2xl">
-                <CardHeader className="text-center">
-                  <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-secondary">
-                    <FileText className="h-10 w-10 text-muted-foreground" />
-                  </div>
-                  <CardTitle>No Estimates Yet</CardTitle>
-                  <CardDescription>
-                    Create an estimate for this project by recording a voice description or manually adding line items.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex justify-center gap-4">
-                  <Button asChild size="lg">
-                    <Link href="/record">
-                      <Plus className="mr-2 h-4 w-4" />
-                      Create Estimate
-                    </Link>
-                  </Button>
-                </CardContent>
-              </Card>
-            )}
+            </div>
           </main>
         </div>
       </div>
