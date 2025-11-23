@@ -10,8 +10,9 @@ import { AuthGuard } from "@/components/auth-guard"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/db-client"
 import { EstimateTable } from "@/components/estimate/EstimateTable"
+import { Recorder } from "@/components/voice/Recorder"
 import type { Project, Estimate } from "@/types/db"
-import { ArrowLeft, Calendar, FileText, DollarSign, Plus, Trash2 } from "lucide-react"
+import { ArrowLeft, Calendar, FileText, DollarSign, Plus, Trash2, Mic } from "lucide-react"
 import Link from "next/link"
 
 export default function ProjectDetailPage() {
@@ -27,6 +28,8 @@ export default function ProjectDetailPage() {
   const [activeEstimateId, setActiveEstimateId] = useState<string | null>(null)
   const [deletingProject, setDeletingProject] = useState(false)
   const [deletingEstimateId, setDeletingEstimateId] = useState<string | null>(null)
+  const [showRecorder, setShowRecorder] = useState(false)
+  const [isParsing, setIsParsing] = useState(false)
 
   useEffect(() => {
     const fetchProjectData = async () => {
@@ -108,6 +111,62 @@ export default function ProjectDetailPage() {
   const handleEstimateSave = (estimateId: string, total: number) => {
     // Refresh estimates list
     db.getEstimates(projectId).then(setEstimates).catch(console.error)
+  }
+
+  const handleRecordingComplete = async (audioBlob: Blob, transcript: string) => {
+    if (!transcript.trim()) {
+      alert('No transcript available. Please try recording again.')
+      return
+    }
+
+    setIsParsing(true)
+    setShowRecorder(false)
+
+    try {
+      // Parse transcript with AI
+      const response = await fetch('/api/ai/parse', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          projectId: projectId,
+          transcript: transcript
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Parse failed: ${response.status}`)
+      }
+
+      const result = await response.json()
+      
+      // Refresh estimates list to show the new estimate
+      // Use a small delay to ensure the database has committed the new estimate
+      await new Promise(resolve => setTimeout(resolve, 300))
+      const updatedEstimates = await db.getEstimates(projectId)
+      setEstimates(updatedEstimates)
+      
+      // Set the newly created estimate as active
+      if (result.estimateId) {
+        setActiveEstimateId(result.estimateId)
+        
+        // Force a re-render by ensuring the estimate is in the list
+        // The EstimateTable will update via the useEffect that watches initialData
+        // The estimateData is computed from activeEstimate which will update when estimates list updates
+      } else {
+        // If no estimateId was returned, try to find the most recent estimate
+        if (updatedEstimates.length > 0) {
+          setActiveEstimateId(updatedEstimates[0].id)
+        }
+      }
+    } catch (error) {
+      console.error('Parse error:', error)
+      alert(error instanceof Error ? error.message : 'Failed to parse transcript')
+    } finally {
+      setIsParsing(false)
+    }
   }
 
   const handleDeleteProject = async () => {
@@ -289,6 +348,44 @@ export default function ProjectDetailPage() {
 
             {/* Estimates Section - Always show the estimate interface */}
             <div className="space-y-4">
+              {/* Create Estimate Button */}
+              <div className="flex justify-end">
+                <Button
+                  onClick={() => setShowRecorder(!showRecorder)}
+                  variant="default"
+                  disabled={isParsing}
+                >
+                  {isParsing ? (
+                    <>
+                      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                      Creating Estimate...
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="mr-2 h-4 w-4" />
+                      {showRecorder ? 'Cancel Recording' : 'Create Estimate with Voice'}
+                    </>
+                  )}
+                </Button>
+              </div>
+
+              {/* Recorder Component */}
+              {showRecorder && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Record Project Description</CardTitle>
+                    <CardDescription>
+                      Describe your project by voice. The AI will parse your description and create line items.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <Recorder
+                      projectId={projectId}
+                      onRecordingComplete={handleRecordingComplete}
+                    />
+                  </CardContent>
+                </Card>
+              )}
               {estimates.length > 1 && (
                 <Card>
                   <CardHeader>

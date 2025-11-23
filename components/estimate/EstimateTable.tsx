@@ -51,6 +51,17 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave }: Es
   const [blockedActionMessage, setBlockedActionMessage] = useState<string | null>(null)
   const { user } = useAuth()
 
+  // Update items and missingInfo when initialData changes
+  useEffect(() => {
+    if (initialData) {
+      setItems(initialData.items || [])
+      setMissingInfo(initialData.missing_info || [])
+    } else {
+      setItems([])
+      setMissingInfo([])
+    }
+  }, [initialData])
+
   // Auto-compute totals when items change
   useEffect(() => {
     setItems(prevItems => 

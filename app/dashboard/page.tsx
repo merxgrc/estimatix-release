@@ -7,17 +7,20 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { UserMenu } from "@/components/user-menu"
 import { AuthGuard } from "@/components/auth-guard"
 import { Plus, FolderOpen, Calendar, Trash2 } from "lucide-react"
+import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/db-client"
 import type { Project } from "@/types/db"
 
 export default function DashboardPage() {
+  const router = useRouter()
   const { user } = useAuth()
   const [projects, setProjects] = useState<Project[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
+  const [isCreatingProject, setIsCreatingProject] = useState(false)
 
   useEffect(() => {
     const fetchProjects = async () => {
@@ -41,6 +44,26 @@ export default function DashboardPage() {
 
     fetchProjects()
   }, [user])
+
+  const handleCreateProject = async () => {
+    if (!user?.id) return
+
+    setIsCreatingProject(true)
+    try {
+      const project = await db.createProject({
+        user_id: user.id,
+        title: `New Project ${new Date().toLocaleDateString()}`,
+        client_name: null,
+        notes: null,
+      })
+      router.push(`/projects/${project.id}`)
+    } catch (err) {
+      console.error('Error creating project:', err)
+      const errorMessage = err instanceof Error ? err.message : 'Failed to create project'
+      alert(`Error: ${errorMessage}`)
+      setIsCreatingProject(false)
+    }
+  }
 
   const handleDeleteProject = async (projectId: string, projectTitle: string) => {
     if (!confirm(`Are you sure you want to delete "${projectTitle}"? This will also delete all estimates associated with this project. This action cannot be undone.`)) {
@@ -72,11 +95,18 @@ export default function DashboardPage() {
           <div className="flex h-16 items-center justify-between px-4 md:px-6">
             <h1 className="text-xl font-semibold">Projects</h1>
             <div className="flex items-center space-x-4">
-              <Button asChild>
-                <Link href="/record">
-                  <Plus className="mr-2 h-4 w-4" />
-                  New Project
-                </Link>
+              <Button onClick={handleCreateProject} disabled={isCreatingProject}>
+                {isCreatingProject ? (
+                  <>
+                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="mr-2 h-4 w-4" />
+                    New Project
+                  </>
+                )}
               </Button>
               <UserMenu user={user} />
             </div>
@@ -116,11 +146,18 @@ export default function DashboardPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex justify-center">
-                <Button asChild size="lg">
-                  <Link href="/record">
-                    <Plus className="mr-2 h-4 w-4" />
-                    Create First Project
-                  </Link>
+                <Button onClick={handleCreateProject} disabled={isCreatingProject} size="lg">
+                  {isCreatingProject ? (
+                    <>
+                      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                      Creating...
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Create First Project
+                    </>
+                  )}
                 </Button>
               </CardContent>
             </Card>

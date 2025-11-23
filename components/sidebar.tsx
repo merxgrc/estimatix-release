@@ -1,19 +1,43 @@
 "use client"
 
+import { useState } from "react"
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home, Mic, Settings, LogOut } from "lucide-react"
+import { Home, FolderPlus, Settings, LogOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { useAuth } from "@/lib/auth-context"
+import { db } from "@/lib/db-client"
 
 const navigation = [
   { name: "Projects", href: "/dashboard", icon: Home },
-  { name: "New Estimate", href: "/record", icon: Mic },
   { name: "Settings", href: "/settings", icon: Settings },
 ]
 
 export function Sidebar() {
   const pathname = usePathname()
+  const router = useRouter()
+  const { user } = useAuth()
+  const [isCreatingProject, setIsCreatingProject] = useState(false)
+
+  const handleCreateProject = async () => {
+    if (!user?.id) return
+
+    setIsCreatingProject(true)
+    try {
+      const project = await db.createProject({
+        user_id: user.id,
+        title: `New Project ${new Date().toLocaleDateString()}`,
+        client_name: null,
+        notes: null,
+      })
+      router.push(`/projects/${project.id}`)
+    } catch (err) {
+      console.error('Error creating project:', err)
+      alert('Failed to create project. Please try again.')
+      setIsCreatingProject(false)
+    }
+  }
 
   return (
     <>
@@ -50,6 +74,24 @@ export function Sidebar() {
                 </Link>
               )
             })}
+            <Button
+              onClick={handleCreateProject}
+              disabled={isCreatingProject}
+              className="w-full justify-start mt-2"
+              variant="default"
+            >
+              {isCreatingProject ? (
+                <>
+                  <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <FolderPlus className="mr-2 h-4 w-4" />
+                  New Project
+                </>
+              )}
+            </Button>
           </nav>
 
           {/* User Section */}
@@ -75,7 +117,7 @@ export function Sidebar() {
       {/* Mobile Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-background md:hidden">
         <div className="flex items-center justify-around">
-          {navigation.slice(0, 3).map((item) => {
+          {navigation.map((item) => {
             const isActive = pathname === item.href
             return (
               <Link
@@ -91,6 +133,21 @@ export function Sidebar() {
               </Link>
             )
           })}
+          <button
+            onClick={handleCreateProject}
+            disabled={isCreatingProject}
+            className={cn(
+              "flex flex-1 flex-col items-center gap-1 py-3 text-xs font-medium transition-colors",
+              isCreatingProject ? "text-muted-foreground" : "text-foreground",
+            )}
+          >
+            {isCreatingProject ? (
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-foreground border-t-transparent" />
+            ) : (
+              <FolderPlus className="h-5 w-5" />
+            )}
+            New Project
+          </button>
         </div>
       </nav>
     </>
