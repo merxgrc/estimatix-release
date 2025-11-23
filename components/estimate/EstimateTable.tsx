@@ -38,9 +38,15 @@ interface EstimateTableProps {
   estimateId?: string | null
   initialData?: EstimateData
   onSave?: (estimateId: string, total: number) => void
+  projectMetadata?: {
+    projectName: string
+    clientName: string
+    clientAddress: string
+    projectDescription: string
+  }
 }
 
-export function EstimateTable({ projectId, estimateId, initialData, onSave }: EstimateTableProps) {
+export function EstimateTable({ projectId, estimateId, initialData, onSave, projectMetadata }: EstimateTableProps) {
   const [items, setItems] = useState<LineItem[]>(initialData?.items || [])
   const [missingInfo, setMissingInfo] = useState<string[]>(initialData?.missing_info || [])
   const [isSaving, setIsSaving] = useState(false)
