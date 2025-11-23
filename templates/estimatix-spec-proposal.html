@@ -129,11 +129,11 @@
   {{#sections}}
   <div class="section">
 
-    <!-- Example: "201 DEMO" -->
+    <!-- Example: "201 DEMO" or "520 WINDOWS Allowance: $62,000" -->
     <div class="section-title">
       {{code}} {{title}}
       {{#if allowance}}
-        <span class="allowance">Allowance: ${{allowance}}</span>
+        <span class="allowance">Allowance: ${{formatNumber allowance}}</span>
       {{/if}}
     </div>
 

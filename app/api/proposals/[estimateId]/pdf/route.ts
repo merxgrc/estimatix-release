@@ -4,6 +4,7 @@ import { chromium } from "playwright";
 import { loadTemplate } from "@/lib/loadTemplate";
 import { renderTemplate } from "@/lib/renderTemplate";
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { isAllowanceCostCode, getCostCodeForItem } from "@/lib/allowanceRules";
 
 export const runtime = "nodejs";
 
@@ -13,22 +14,28 @@ function transformItemsToSections(jsonData: any): any[] {
     return [];
   }
 
-  // Group items by category
-  const itemsByCategory = new Map<string, any[]>();
+  // Group items by category, preserving cost code information
+  const itemsByCategory = new Map<string, { items: any[], costCode?: string }>();
   
   jsonData.items.forEach((item: any) => {
     const category = item.category || 'Other';
+    const costCode = getCostCodeForItem(item);
+    
     if (!itemsByCategory.has(category)) {
-      itemsByCategory.set(category, []);
+      itemsByCategory.set(category, { items: [], costCode });
     }
-    itemsByCategory.get(category)!.push(item);
+    itemsByCategory.get(category)!.items.push(item);
+    // Use the first cost code found for this category
+    if (costCode && !itemsByCategory.get(category)!.costCode) {
+      itemsByCategory.get(category)!.costCode = costCode;
+    }
   });
 
   // Convert each category group into a section
   const sections: any[] = [];
   let sectionCode = 100;
 
-  itemsByCategory.forEach((items, category) => {
+  itemsByCategory.forEach(({ items, costCode }, category) => {
     const sectionItems = items.map((item: any) => {
       const parts: string[] = [];
       
@@ -56,9 +63,20 @@ function transformItemsToSections(jsonData: any): any[] {
       };
     });
 
+    // Calculate allowance if this section is allowance-eligible
+    let allowance: number | null = null;
+    if (costCode && isAllowanceCostCode(costCode)) {
+      // Sum all item totals for this section
+      const sectionTotal = items.reduce((sum, item) => {
+        return sum + (item.total || 0);
+      }, 0);
+      allowance = sectionTotal > 0 ? sectionTotal : null;
+    }
+
     sections.push({
-      code: sectionCode.toString(),
+      code: costCode || sectionCode.toString(),
       title: category.toUpperCase(),
+      allowance: allowance,
       items: sectionItems
     });
 
@@ -151,22 +169,33 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
     console.log(`[PDF] Section ${section.code} ${section.title}: ${normalizedItems.length} normalized items`);
 
     // Format allowance for display (convert number to formatted string if needed)
-    let allowanceValue = null;
-    if (section.allowance !== null && section.allowance !== undefined) {
-      if (typeof section.allowance === 'number') {
-        allowanceValue = section.allowance;
-      } else if (typeof section.allowance === 'string') {
-        // Try to parse string allowance
-        const cleaned = section.allowance.replace(/[$,\s]/g, '');
-        const parsed = parseFloat(cleaned);
-        allowanceValue = isNaN(parsed) ? null : parsed;
+    let allowanceValue: number | null = null;
+    
+    // Check if this section should have an allowance based on cost code
+    const sectionCostCode = section.code || '';
+    const shouldShowAllowance = isAllowanceCostCode(sectionCostCode);
+    
+    if (shouldShowAllowance) {
+      // If allowance is explicitly set, use it
+      if (section.allowance !== null && section.allowance !== undefined) {
+        if (typeof section.allowance === 'number') {
+          allowanceValue = section.allowance;
+        } else if (typeof section.allowance === 'string') {
+          // Try to parse string allowance
+          const cleaned = section.allowance.replace(/[$,\s]/g, '');
+          const parsed = parseFloat(cleaned);
+          allowanceValue = isNaN(parsed) ? null : parsed;
+        }
       }
+      // Note: Allowance calculation from items is done before normalization
+      // in the main GET handler, so we don't need to recalculate here
     }
+    // If not allowance-eligible, leave allowanceValue as null (will not display)
 
     return {
       code: section.code || '',
       title: section.title || '',
-      allowance: allowanceValue,
+      allowance: allowanceValue, // Only set if cost code is allowance-eligible
       items: normalizedItems,
       subcontractor: section.subcontractor || null,
       notes: section.notes || null
@@ -196,6 +225,9 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       return NextResponse.json({ error: "Estimate not found" }, { status: 404 });
     }
 
+    const jsonData = estimate.json_data as any;
+    const allItems = jsonData?.items || [];
+
     // Use spec_sections from database, or fallback to transformed json_data
     let sections: any[] = [];
     
@@ -203,9 +235,43 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       // Use structured spec sections from AI parsing
       sections = estimate.spec_sections;
       console.log('[PDF] Using spec_sections from database:', JSON.stringify(sections, null, 2));
+      
+      // Enhance sections with allowance calculations based on cost codes
+      sections = sections.map(section => {
+        const costCode = section.code || '';
+        const shouldShowAllowance = isAllowanceCostCode(costCode);
+        
+        if (shouldShowAllowance) {
+          // If allowance is not explicitly set, calculate it from matching items
+          if (section.allowance === null || section.allowance === undefined) {
+            // Find items that match this section's cost code or category
+            const matchingItems = allItems.filter((item: any) => {
+              const itemCostCode = getCostCodeForItem(item);
+              const sectionTitleUpper = (section.title || '').toUpperCase();
+              const itemCategoryUpper = (item.category || '').toUpperCase();
+              
+              return itemCostCode === costCode || 
+                     itemCategoryUpper === sectionTitleUpper ||
+                     (sectionTitleUpper.includes(itemCategoryUpper) || itemCategoryUpper.includes(sectionTitleUpper));
+            });
+            
+            const calculatedTotal = matchingItems.reduce((sum: number, item: any) => {
+              return sum + (item.total || 0);
+            }, 0);
+            
+            if (calculatedTotal > 0) {
+              section.allowance = calculatedTotal;
+            }
+          }
+        } else {
+          // Not allowance-eligible, ensure allowance is null
+          section.allowance = null;
+        }
+        
+        return section;
+      });
     } else {
       // Fallback: transform json_data.items into sections format
-      const jsonData = estimate.json_data as any;
       sections = transformItemsToSections(jsonData);
       console.log('[PDF] Using transformed json_data:', JSON.stringify(sections, null, 2));
     }
@@ -266,17 +332,7 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       return NextResponse.json({ error: uploadError.message }, { status: 500 });
     }
 
-    const {
-      data: { publicUrl },
-      error: publicUrlError,
-    } = supabase.storage.from("proposals").getPublicUrl(fileName);
-
-    if (publicUrlError) {
-      return NextResponse.json(
-        { error: publicUrlError.message },
-        { status: 500 },
-      );
-    }
+    const { data: { publicUrl } } = supabase.storage.from("proposals").getPublicUrl(fileName);
 
     const { error: updateError } = await supabase
       .from("estimates")

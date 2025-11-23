@@ -16,6 +16,11 @@ export function renderTemplate(templateString: string, data: any) {
     return value !== null && value !== undefined && value !== '';
   });
 
+  Handlebars.registerHelper('formatNumber', function(value: number) {
+    if (value === null || value === undefined) return '';
+    return value.toLocaleString('en-US');
+  });
+
   const template = Handlebars.compile(templateString);
   return template(data);
 }
