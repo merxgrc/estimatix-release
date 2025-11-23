@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Save, AlertTriangle, Plus, Trash2 } from 'lucide-react'
+import { Save, AlertTriangle, Plus, Trash2, FileText, Download } from 'lucide-react'
 import { supabase } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/auth-context'
 
@@ -35,16 +35,19 @@ interface EstimateData {
 
 interface EstimateTableProps {
   projectId?: string | null
+  estimateId?: string | null
   initialData?: EstimateData
   onSave?: (estimateId: string, total: number) => void
 }
 
-export function EstimateTable({ projectId, initialData, onSave }: EstimateTableProps) {
+export function EstimateTable({ projectId, estimateId, initialData, onSave }: EstimateTableProps) {
   const [items, setItems] = useState<LineItem[]>(initialData?.items || [])
   const [missingInfo, setMissingInfo] = useState<string[]>(initialData?.missing_info || [])
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isGeneratingProposal, setIsGeneratingProposal] = useState(false)
+  const [proposalUrl, setProposalUrl] = useState<string | null>(null)
   const { user } = useAuth()
 
   // Auto-compute totals when items change
@@ -116,8 +119,30 @@ export function EstimateTable({ projectId, initialData, onSave }: EstimateTableP
         missing_info: missingInfo
       }
 
-      // If we have an existing estimate, update it
-      if (initialData) {
+      // If we have an existing estimate ID, update it directly
+      if (estimateId) {
+        const { data, error: updateError } = await supabase
+          .from('estimates')
+          .update({
+            json_data: estimateData,
+            total: grandTotal,
+            ai_summary: `Updated estimate with ${items.length} line items`
+          })
+          .eq('id', estimateId)
+          .select()
+          .single()
+
+        if (updateError) {
+          throw new Error(`Failed to update estimate: ${updateError.message}`)
+        }
+
+        setSaveSuccess(true)
+        onSave?.(data.id, grandTotal)
+        return
+      }
+
+      // If we have initialData and a valid projectId, try to find existing estimate
+      if (initialData && projectId && projectId !== 'null') {
         const { data: existingEstimate, error: fetchError } = await supabase
           .from('estimates')
           .select('id')
@@ -146,20 +171,26 @@ export function EstimateTable({ projectId, initialData, onSave }: EstimateTableP
           }
 
           setSaveSuccess(true)
-          onSave?.(existingEstimate.id, grandTotal)
+          onSave?.(data.id, grandTotal)
           return
         }
       }
 
-      // Create new estimate
+      // Create new estimate (only set project_id if it's valid)
+      const insertData: any = {
+        json_data: estimateData,
+        total: grandTotal,
+        ai_summary: `Created estimate with ${items.length} line items`
+      }
+
+      // Only add project_id if it's a valid UUID (not null, undefined, or "null")
+      if (projectId && projectId !== 'null' && projectId !== 'undefined') {
+        insertData.project_id = projectId
+      }
+
       const { data, error: insertError } = await supabase
         .from('estimates')
-        .insert({
-          project_id: projectId || null,
-          json_data: estimateData,
-          total: grandTotal,
-          ai_summary: `Created estimate with ${items.length} line items`
-        })
+        .insert(insertData)
         .select()
         .single()
 
@@ -184,6 +215,36 @@ export function EstimateTable({ projectId, initialData, onSave }: EstimateTableP
     return depth 
       ? `${width}×${height}×${depth} ${unit}`
       : `${width}×${height} ${unit}`
+  }
+
+  const generateProposal = async () => {
+    if (!estimateId) {
+      setError('Please save the estimate first before generating a proposal')
+      return
+    }
+
+    setIsGeneratingProposal(true)
+    setError(null)
+    setProposalUrl(null)
+
+    try {
+      const response = await fetch(`/api/proposals/${estimateId}/pdf`, {
+        method: 'GET',
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to generate proposal: ${response.status}`)
+      }
+
+      const data = await response.json()
+      setProposalUrl(data.url)
+    } catch (err) {
+      console.error('Generate proposal error:', err)
+      setError(err instanceof Error ? err.message : 'Failed to generate proposal')
+    } finally {
+      setIsGeneratingProposal(false)
+    }
   }
 
   return (
@@ -213,6 +274,26 @@ export function EstimateTable({ projectId, initialData, onSave }: EstimateTableP
                 <Plus className="mr-2 h-4 w-4" />
                 Add Item
               </Button>
+              {estimateId && (
+                <Button 
+                  onClick={generateProposal} 
+                  disabled={isGeneratingProposal}
+                  variant="outline"
+                  size="sm"
+                >
+                  {isGeneratingProposal ? (
+                    <>
+                      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="mr-2 h-4 w-4" />
+                      Generate Proposal
+                    </>
+                  )}
+                </Button>
+              )}
               <Button 
                 onClick={saveEstimate} 
                 disabled={isSaving || items.length === 0}
@@ -245,6 +326,23 @@ export function EstimateTable({ projectId, initialData, onSave }: EstimateTableP
             <Alert className="mb-4 border-green-200 bg-green-50">
               <AlertDescription className="text-green-800">
                 ✓ Estimate saved successfully!
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {proposalUrl && (
+            <Alert className="mb-4 border-blue-200 bg-blue-50">
+              <AlertDescription className="text-blue-800 flex items-center justify-between">
+                <span>✓ Proposal generated successfully!</span>
+                <Button
+                  onClick={() => window.open(proposalUrl, '_blank')}
+                  variant="outline"
+                  size="sm"
+                  className="ml-4"
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Download PDF
+                </Button>
               </AlertDescription>
             </Alert>
           )}
