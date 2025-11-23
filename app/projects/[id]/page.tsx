@@ -11,8 +11,10 @@ import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/db-client"
 import { EstimateTable } from "@/components/estimate/EstimateTable"
 import { Recorder } from "@/components/voice/Recorder"
+import { EditableProjectTitle } from "@/components/editable-project-title"
+import { EditableField } from "@/components/editable-field"
 import type { Project, Estimate } from "@/types/db"
-import { ArrowLeft, Calendar, FileText, DollarSign, Plus, Trash2, Mic } from "lucide-react"
+import { ArrowLeft, Calendar, FileText, DollarSign, Plus, Trash2, Mic, MapPin, User } from "lucide-react"
 import Link from "next/link"
 
 export default function ProjectDetailPage() {
@@ -217,6 +219,30 @@ export default function ProjectDetailPage() {
     }
   }
 
+  const handleUpdateProjectTitle = async (newTitle: string) => {
+    if (!project) return
+    
+    await db.updateProject(projectId, { title: newTitle })
+    // Update local state
+    setProject({ ...project, title: newTitle })
+  }
+
+  const handleUpdateProjectOwner = async (ownerName: string) => {
+    if (!project) return
+    
+    await db.updateProject(projectId, { owner_name: ownerName || null })
+    // Update local state
+    setProject({ ...project, owner_name: ownerName || null })
+  }
+
+  const handleUpdateProjectAddress = async (address: string) => {
+    if (!project) return
+    
+    await db.updateProject(projectId, { project_address: address || null })
+    // Update local state
+    setProject({ ...project, project_address: address || null })
+  }
+
   if (isLoading) {
     return (
       <AuthGuard>
@@ -277,7 +303,11 @@ export default function ProjectDetailPage() {
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back
                 </Button>
-                <h1 className="text-xl font-semibold">{project.title}</h1>
+                <EditableProjectTitle
+                  title={project.title}
+                  onSave={handleUpdateProjectTitle}
+                  variant="default"
+                />
               </div>
               <div className="flex items-center gap-2">
                 <Button
@@ -308,12 +338,34 @@ export default function ProjectDetailPage() {
             {/* Project Info Card */}
             <Card>
               <CardHeader>
-                <CardTitle>{project.title}</CardTitle>
+                <EditableProjectTitle
+                  title={project.title}
+                  onSave={handleUpdateProjectTitle}
+                  variant="card"
+                  className="mb-0"
+                />
                 <CardDescription>
+                  <div className="space-y-3 mt-3">
+                    <EditableField
+                      label="Owner"
+                      value={project.owner_name}
+                      onSave={handleUpdateProjectOwner}
+                      placeholder="Property owner name"
+                    />
+                    <EditableField
+                      label="Address"
+                      value={project.project_address}
+                      onSave={handleUpdateProjectAddress}
+                      placeholder="Property address"
+                      multiline
+                    />
+                  </div>
                   {project.client_name && (
-                    <span className="block">{project.client_name}</span>
+                    <div className="mt-3">
+                      <span className="text-sm text-muted-foreground">Client: {project.client_name}</span>
+                    </div>
                   )}
-                  <div className="flex items-center gap-4 mt-2 text-sm">
+                  <div className="flex items-center gap-4 mt-3 text-sm">
                     <div className="flex items-center text-muted-foreground">
                       <Calendar className="mr-2 h-4 w-4" />
                       Created {new Date(project.created_at).toLocaleDateString('en-US', {

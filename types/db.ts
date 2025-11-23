@@ -15,6 +15,8 @@ export interface Database {
           user_id: string
           title: string
           client_name: string | null
+          owner_name: string | null
+          project_address: string | null
           notes: string | null
           created_at: string
         }
@@ -23,6 +25,8 @@ export interface Database {
           user_id: string
           title: string
           client_name?: string | null
+          owner_name?: string | null
+          project_address?: string | null
           notes?: string | null
           created_at?: string
         }
@@ -31,6 +35,8 @@ export interface Database {
           user_id?: string
           title?: string
           client_name?: string | null
+          owner_name?: string | null
+          project_address?: string | null
           notes?: string | null
           created_at?: string
         }

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { UserMenu } from "@/components/user-menu"
 import { AuthGuard } from "@/components/auth-guard"
+import { EditableProjectTitle } from "@/components/editable-project-title"
 import { Plus, FolderOpen, Calendar, Trash2 } from "lucide-react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
@@ -81,6 +82,17 @@ export default function DashboardPage() {
       alert(`Error: ${errorMessage}`)
     } finally {
       setDeletingProjectId(null)
+    }
+  }
+
+  const handleUpdateProjectTitle = async (projectId: string, newTitle: string) => {
+    try {
+      await db.updateProject(projectId, { title: newTitle })
+      // Update local state
+      setProjects(prev => prev.map(p => p.id === projectId ? { ...p, title: newTitle } : p))
+    } catch (err) {
+      console.error('Error updating project title:', err)
+      throw err // Re-throw so EditableProjectTitle can handle it
     }
   }
 
@@ -165,15 +177,22 @@ export default function DashboardPage() {
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {projects.map((project) => (
                 <Card key={project.id} className="hover:shadow-lg transition-shadow relative group">
+                  <CardHeader>
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <EditableProjectTitle
+                        title={project.title}
+                        onSave={(newTitle) => handleUpdateProjectTitle(project.id, newTitle)}
+                        variant="card"
+                        className="line-clamp-2"
+                      />
+                    </div>
+                    {project.client_name && (
+                      <CardDescription className="line-clamp-1">
+                        {project.client_name}
+                      </CardDescription>
+                    )}
+                  </CardHeader>
                   <Link href={`/projects/${project.id}`} className="block">
-                    <CardHeader>
-                      <CardTitle className="line-clamp-2">{project.title}</CardTitle>
-                      {project.client_name && (
-                        <CardDescription className="line-clamp-1">
-                          {project.client_name}
-                        </CardDescription>
-                      )}
-                    </CardHeader>
                     <CardContent>
                       <div className="flex items-center text-sm text-muted-foreground">
                         <Calendar className="mr-2 h-4 w-4" />

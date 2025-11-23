@@ -8,6 +8,153 @@ import { isAllowanceCostCode, getCostCodeForItem } from "@/lib/allowanceRules";
 
 export const runtime = "nodejs";
 
+/**
+ * Pluralize a noun based on quantity.
+ * 
+ * @param noun - The noun to pluralize
+ * @param qty - The quantity
+ * @returns Pluralized noun if qty > 1, otherwise singular
+ */
+function pluralizeNoun(noun: string, qty: number): string {
+  if (qty === 1) return noun;
+  
+  const nounLower = noun.toLowerCase();
+  
+  // Common pluralization rules
+  const pluralRules: Record<string, string> = {
+    'window': 'windows',
+    'door': 'doors',
+    'cabinet': 'cabinets',
+    'fixture': 'fixtures',
+    'outlet': 'outlets',
+    'switch': 'switches',
+    'light': 'lights',
+    'fan': 'fans',
+    'appliance': 'appliances',
+    'countertop': 'countertops',
+    'sink': 'sinks',
+    'faucet': 'faucets',
+    'toilet': 'toilets',
+    'shower': 'showers',
+    'bathtub': 'bathtubs',
+    'mirror': 'mirrors',
+    'tile': 'tiles',
+    'board': 'boards',
+    'panel': 'panels',
+    'unit': 'units',
+    'item': 'items',
+    'piece': 'pieces',
+  };
+  
+  // Check if we have a direct mapping
+  if (pluralRules[nounLower]) {
+    // Preserve original case
+    if (noun[0] === noun[0].toUpperCase()) {
+      return pluralRules[nounLower].charAt(0).toUpperCase() + pluralRules[nounLower].slice(1);
+    }
+    return pluralRules[nounLower];
+  }
+  
+  // Default pluralization rules
+  if (nounLower.endsWith('y') && !['ay', 'ey', 'iy', 'oy', 'uy'].some(ending => nounLower.endsWith(ending))) {
+    return noun.slice(0, -1) + 'ies';
+  } else if (nounLower.endsWith('s') || nounLower.endsWith('sh') || nounLower.endsWith('ch') || 
+             nounLower.endsWith('x') || nounLower.endsWith('z')) {
+    return noun + 'es';
+  } else if (nounLower.endsWith('f')) {
+    return noun.slice(0, -1) + 'ves';
+  } else if (nounLower.endsWith('fe')) {
+    return noun.slice(0, -2) + 'ves';
+  } else {
+    return noun + 's';
+  }
+}
+
+/**
+ * Format a proposal bullet point with quantity information.
+ * 
+ * @param item - Item object with description, quantity, and optional unit info
+ * @param originalItem - Optional original line item with full details (qty, unit_cost, etc.)
+ * @returns Formatted bullet text with quantity embedded
+ */
+function formatProposalBullet(item: any, originalItem?: any): string {
+  const description = item.text || item.description || '';
+  if (!description) return '';
+  
+  // Get quantity from originalItem if available, otherwise from item
+  const qty = originalItem?.quantity || originalItem?.qty || item.quantity || item.qty;
+  
+  // If no quantity or quantity is 0 or invalid, return description as-is
+  if (!qty || qty === 0 || typeof qty !== 'number') {
+    return description;
+  }
+  
+  // Check if description already contains a number/quantity to avoid double-counting
+  const hasNumberInDescription = /\d+/.test(description);
+  if (hasNumberInDescription) {
+    // Check if it's a quantity-like pattern (e.g., "7 windows", "120 sq ft")
+    const quantityPattern = /^(\d+)\s*(x|×)?\s*/i;
+    if (quantityPattern.test(description)) {
+      // Already has quantity prefix, return as-is
+      return description;
+    }
+  }
+  
+  // Format quantity based on type
+  let quantityText = '';
+  
+  // Check if this is a square footage or area measurement
+  const descLower = description.toLowerCase();
+  if (descLower.includes('sq ft') || descLower.includes('square feet') || 
+      descLower.includes('sq.ft') || descLower.includes('sqft')) {
+    quantityText = `<strong>${qty} sq ft</strong>`;
+  } else if (descLower.includes('sq yd') || descLower.includes('square yard')) {
+    quantityText = `<strong>${qty} sq yd</strong>`;
+  } else if (descLower.includes('linear ft') || descLower.includes('lf') || descLower.includes('lin ft')) {
+    quantityText = `<strong>${qty} linear ft</strong>`;
+  } else {
+    // Regular count quantity
+    quantityText = `<strong>${qty}</strong>`;
+  }
+  
+  // Apply pluralization to the description if qty > 1
+  let processedDescription = description;
+  if (qty > 1) {
+    // Try to find and pluralize common nouns after verbs
+    const verbPattern = /^(Replace|Install|Remove|Demo|Add|Upgrade|Refinish|Paint|Reface|Haul|Dispose|Disconnect|Connect|Wire|Plumb|Frame|Drywall|Tile|Floor|Cabinet)\s+(\w+)/i;
+    const match = processedDescription.match(verbPattern);
+    
+    if (match) {
+      const verb = match[1];
+      const noun = match[2];
+      const rest = processedDescription.substring(match[0].length);
+      const pluralizedNoun = pluralizeNoun(noun, qty);
+      processedDescription = `${verb} ${pluralizedNoun}${rest}`;
+    } else {
+      // Try to find nouns at the start or after common patterns
+      const nounPattern = /\b(window|door|cabinet|fixture|outlet|switch|light|fan|appliance|countertop|sink|faucet|toilet|shower|bathtub|mirror|tile|board|panel|unit|item|piece)\b/gi;
+      processedDescription = processedDescription.replace(nounPattern, (match: string) => {
+        return pluralizeNoun(match, qty);
+      });
+    }
+  }
+  
+  // Insert quantity into description
+  // Try to find a good insertion point (after verbs like "Replace", "Install", "Remove", etc.)
+  const verbPattern = /^(Replace|Install|Remove|Demo|Add|Upgrade|Refinish|Paint|Reface|Haul|Dispose|Disconnect|Connect|Wire|Plumb|Frame|Drywall|Tile|Floor|Cabinet)\s+/i;
+  const match = processedDescription.match(verbPattern);
+  
+  if (match) {
+    // Insert after verb
+    const verb = match[0].trim();
+    const rest = processedDescription.substring(match[0].length).trim();
+    return `${verb} ${quantityText} ${rest}`;
+  } else {
+    // Insert at the beginning
+    return `${quantityText} ${processedDescription}`;
+  }
+}
+
 // Transform line items from json_data into sections format for the template
 function transformItemsToSections(jsonData: any): any[] {
   if (!jsonData?.items || !Array.isArray(jsonData.items)) {
@@ -37,14 +184,10 @@ function transformItemsToSections(jsonData: any): any[] {
 
   itemsByCategory.forEach(({ items, costCode }, category) => {
     const sectionItems = items.map((item: any) => {
-      const parts: string[] = [];
+      // Format description with quantity using the helper function
+      let desc = formatProposalBullet({ description: item.description }, item);
       
-      // Build description with quantity and dimensions
-      let desc = item.description || '';
-      if (item.quantity && item.quantity > 1) {
-        desc = `${item.quantity}x ${desc}`;
-      }
-      
+      // Add dimensions if present (but don't duplicate quantity info)
       if (item.dimensions) {
         const dims = item.dimensions;
         const dimStr = dims.depth 
@@ -53,9 +196,8 @@ function transformItemsToSections(jsonData: any): any[] {
         desc = `${desc} (${dimStr})`;
       }
       
-      if (item.unit_cost) {
-        desc = `${desc} - $${item.unit_cost.toLocaleString()}${item.total ? ` (Total: $${item.total.toLocaleString()})` : ''}`;
-      }
+      // Note: Removed unit_cost and total from description as they're not needed in proposal bullets
+      // The allowance is shown in the section header instead
 
       return {
         text: desc,
@@ -211,19 +353,32 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
   const { estimateId } = await context.params;
 
   try {
-    const { data: estimate, error } = await supabase
+    // Fetch estimate with project data
+    const { data: estimate, error: estimateError } = await supabase
       .from("estimates")
-      .select("*")
+      .select(`
+        *,
+        projects (
+          id,
+          title,
+          owner_name,
+          project_address,
+          client_name
+        )
+      `)
       .eq("id", estimateId)
       .single();
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (estimateError) {
+      return NextResponse.json({ error: estimateError.message }, { status: 500 });
     }
 
     if (!estimate) {
       return NextResponse.json({ error: "Estimate not found" }, { status: 404 });
     }
+
+    // Extract project data (Supabase returns it as an array for foreign key relationships)
+    const project = Array.isArray(estimate.projects) ? estimate.projects[0] : estimate.projects;
 
     const jsonData = estimate.json_data as any;
     const allItems = jsonData?.items || [];
@@ -236,25 +391,25 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       sections = estimate.spec_sections;
       console.log('[PDF] Using spec_sections from database:', JSON.stringify(sections, null, 2));
       
-      // Enhance sections with allowance calculations based on cost codes
+      // Enhance sections with allowance calculations and quantity formatting
       sections = sections.map(section => {
         const costCode = section.code || '';
         const shouldShowAllowance = isAllowanceCostCode(costCode);
         
+        // Find matching items for this section to get quantities
+        const matchingItems = allItems.filter((item: any) => {
+          const itemCostCode = getCostCodeForItem(item);
+          const sectionTitleUpper = (section.title || '').toUpperCase();
+          const itemCategoryUpper = (item.category || '').toUpperCase();
+          
+          return itemCostCode === costCode || 
+                 itemCategoryUpper === sectionTitleUpper ||
+                 (sectionTitleUpper.includes(itemCategoryUpper) || itemCategoryUpper.includes(sectionTitleUpper));
+        });
+        
         if (shouldShowAllowance) {
           // If allowance is not explicitly set, calculate it from matching items
           if (section.allowance === null || section.allowance === undefined) {
-            // Find items that match this section's cost code or category
-            const matchingItems = allItems.filter((item: any) => {
-              const itemCostCode = getCostCodeForItem(item);
-              const sectionTitleUpper = (section.title || '').toUpperCase();
-              const itemCategoryUpper = (item.category || '').toUpperCase();
-              
-              return itemCostCode === costCode || 
-                     itemCategoryUpper === sectionTitleUpper ||
-                     (sectionTitleUpper.includes(itemCategoryUpper) || itemCategoryUpper.includes(sectionTitleUpper));
-            });
-            
             const calculatedTotal = matchingItems.reduce((sum: number, item: any) => {
               return sum + (item.total || 0);
             }, 0);
@@ -266,6 +421,57 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
         } else {
           // Not allowance-eligible, ensure allowance is null
           section.allowance = null;
+        }
+        
+        // Enhance section items with quantities from matching line items
+        if (section.items && Array.isArray(section.items)) {
+          section.items = section.items.map((item: any) => {
+            const itemText = (item.text || '').toLowerCase();
+            
+            // Skip if text already contains formatted quantity (has <strong> tags)
+            if (itemText.includes('<strong>')) {
+              return item;
+            }
+            
+            // Skip if text already starts with a number pattern (e.g., "7x", "120 sq ft")
+            if (/^(\d+)\s*(x|×|sq\s*ft|sq\s*yd|linear\s*ft)/i.test(itemText)) {
+              return item;
+            }
+            
+            // Try to find a matching original item for this proposal item
+            let matchingItem: any = null;
+            if (matchingItems.length > 0) {
+              matchingItem = matchingItems.find((origItem: any) => {
+                const origDesc = (origItem.description || '').toLowerCase();
+                // Check if descriptions are similar (contain common words)
+                const itemWords = itemText.split(/\s+/).filter((w: string) => w.length > 3);
+                const origWords = origDesc.split(/\s+/).filter((w: string) => w.length > 3);
+                const commonWords = itemWords.filter((w: string) => origWords.includes(w));
+                return commonWords.length > 0 || itemText.includes(origDesc) || origDesc.includes(itemText);
+              });
+            }
+            
+            // Format the text with quantity if we found a match
+            if (matchingItem && item.text) {
+              const formattedText = formatProposalBullet({ text: item.text }, matchingItem);
+              return {
+                ...item,
+                text: formattedText
+              };
+            }
+            
+            // If no match but item has quantity info, use it
+            if (item.quantity || item.qty) {
+              const formattedText = formatProposalBullet(item, item);
+              return {
+                ...item,
+                text: formattedText
+              };
+            }
+            
+            // No quantity available, return as-is
+            return item;
+          });
         }
         
         return section;
@@ -288,9 +494,9 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
 
     const template = loadTemplate("estimatix-spec-proposal.html");
     const html = renderTemplate(template, {
-      owner_name: estimate.client_name || 'N/A',
-      project_address: estimate.project_address || 'N/A',
-      project_name: estimate.project_name || 'Project Estimate',
+      owner_name: project?.owner_name || estimate.client_name || 'N/A',
+      project_address: project?.project_address || estimate.project_address || 'N/A',
+      project_name: project?.title || estimate.project_name || 'Project Estimate',
       proposal_date: new Date().toLocaleDateString(),
       year: new Date().getFullYear(),
       sections: sections,
