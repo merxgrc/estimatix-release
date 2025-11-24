@@ -35,7 +35,7 @@ export function EstimateTab({
 }: EstimateTabProps) {
   const [showRecorder, setShowRecorder] = useState(false)
 
-  const activeEstimate = activeEstimateId ? estimates.find(e => e.id === activeEstimateId) : null
+  const activeEstimate = activeEstimateId ? estimates.find(e => e.id === activeEstimateId) ?? null : null
   const estimateData = activeEstimate?.json_data as any || { items: [], assumptions: [], missing_info: [] }
 
   const handleRecordingComplete = async (audioBlob: Blob, transcript: string) => {

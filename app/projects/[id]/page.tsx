@@ -126,7 +126,6 @@ export default function ProjectDetailPage() {
     }
 
     setIsParsing(true)
-    setShowRecorder(false)
 
     try {
       // Parse transcript with AI
@@ -290,7 +289,7 @@ export default function ProjectDetailPage() {
     )
   }
 
-  const activeEstimate = activeEstimateId ? estimates.find(e => e.id === activeEstimateId) : null
+  const activeEstimate = activeEstimateId ? estimates.find(e => e.id === activeEstimateId) ?? null : null
 
   return (
     <AuthGuard>
