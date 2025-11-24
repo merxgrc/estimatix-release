@@ -20,7 +20,7 @@ export default function LoginPage() {
   // Redirect if already authenticated
   useEffect(() => {
     if (user) {
-      router.push('/dashboard')
+      router.push('/projects')
     }
   }, [user, router])
 
@@ -42,7 +42,7 @@ export default function LoginPage() {
         setError(signInError.message)
       } else {
         // The auth context will handle the redirect
-        router.push('/dashboard')
+        router.push('/projects')
         router.refresh()
       }
     } catch (err) {

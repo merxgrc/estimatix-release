@@ -4,14 +4,17 @@ import { useState } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home, FolderPlus, Settings, LogOut } from "lucide-react"
+import { LayoutDashboard, FolderOpen, TrendingUp, History, FileText, FolderPlus, LogOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/db-client"
 
 const navigation = [
-  { name: "Projects", href: "/dashboard", icon: Home },
-  { name: "Settings", href: "/settings", icon: Settings },
+  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { name: "Projects", href: "/projects", icon: FolderOpen },
+  { name: "Market", href: "/market", icon: TrendingUp },
+  { name: "Historical Data", href: "/historical-data", icon: History },
+  { name: "Estimate", href: "/estimate", icon: FileText },
 ]
 
 export function Sidebar() {
@@ -57,7 +60,10 @@ export function Sidebar() {
           {/* Navigation */}
           <nav className="flex-1 space-y-1 px-3 py-4">
             {navigation.map((item) => {
-              const isActive = pathname === item.href
+              // For Projects, also match /projects/[id] paths
+              const isActive = item.href === "/projects" 
+                ? pathname === item.href || pathname?.startsWith("/projects/")
+                : pathname === item.href
               return (
                 <Link
                   key={item.name}
@@ -118,7 +124,10 @@ export function Sidebar() {
       <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-background md:hidden">
         <div className="flex items-center justify-around">
           {navigation.map((item) => {
-            const isActive = pathname === item.href
+            // For Projects, also match /projects/[id] paths
+            const isActive = item.href === "/projects" 
+              ? pathname === item.href || pathname?.startsWith("/projects/")
+              : pathname === item.href
             return (
               <Link
                 key={item.name}

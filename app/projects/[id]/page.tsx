@@ -181,7 +181,7 @@ export default function ProjectDetailPage() {
     setDeletingProject(true)
     try {
       await db.deleteProject(projectId)
-      router.push('/dashboard')
+      router.push('/projects')
     } catch (err) {
       console.error('Error deleting project:', err)
       const errorMessage = err instanceof Error ? err.message : 'Failed to delete project'
