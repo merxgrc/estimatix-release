@@ -18,7 +18,7 @@ import { PhotosTab } from "./_components/PhotosTab"
 import { DocumentsTab } from "./_components/DocumentsTab"
 import { WalkTab } from "./_components/WalkTab"
 import { ProposalsTab } from "./_components/ProposalsTab"
-import type { Project, Estimate } from "@/types/db"
+import type { Project, Estimate, Upload } from "@/types/db"
 import { ArrowLeft, Trash2 } from "lucide-react"
 
 export default function ProjectDetailPage() {
@@ -29,6 +29,8 @@ export default function ProjectDetailPage() {
 
   const [project, setProject] = useState<Project | null>(null)
   const [estimates, setEstimates] = useState<Estimate[]>([])
+  const [photos, setPhotos] = useState<{ url: string; id: string }[]>([])
+  const [documents, setDocuments] = useState<{ url: string; name: string; id: string }[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeEstimateId, setActiveEstimateId] = useState<string | null>(null)
@@ -48,11 +50,12 @@ export default function ProjectDetailPage() {
         setIsLoading(true)
         setError(null)
 
-        // Fetch project and estimates in parallel
+        // Fetch project, estimates, and uploads in parallel
         // Use Promise.allSettled to handle individual failures gracefully
-        const [projectResult, estimatesResult] = await Promise.allSettled([
+        const [projectResult, estimatesResult, uploadsResult] = await Promise.allSettled([
           db.getProject(projectId),
-          db.getEstimates(projectId)
+          db.getEstimates(projectId),
+          db.getUploads(projectId)
         ])
 
         // Handle project fetch result
@@ -79,9 +82,41 @@ export default function ProjectDetailPage() {
         }
 
         const estimatesData = estimatesResult.value
+        
+        // Handle uploads fetch result
+        let uploadsData: Upload[] = []
+        if (uploadsResult.status === 'fulfilled') {
+          uploadsData = uploadsResult.value
+        } else {
+          console.warn('Error fetching uploads:', uploadsResult.reason)
+        }
 
         setProject(projectData)
         setEstimates(estimatesData)
+        
+        // Separate photos and documents from uploads
+        const photosData = uploadsData
+          .filter(u => u.kind === 'photo')
+          .map(u => ({ url: u.file_url, id: u.id }))
+        
+        const documentsData = uploadsData
+          .filter(u => u.kind === 'blueprint')
+          .map(u => {
+            // Get original filename from database if available, otherwise extract from URL
+            const originalFilename = (u as any).original_filename
+            let filename = originalFilename
+            
+            if (!filename) {
+              // Fallback: try to extract from URL
+              const urlParts = u.file_url.split('/')
+              filename = urlParts[urlParts.length - 1] || 'Document'
+            }
+            
+            return { url: u.file_url, name: filename, id: u.id }
+          })
+        
+        setPhotos(photosData)
+        setDocuments(documentsData)
         
         // Set the most recent estimate as active if any exist
         if (estimatesData.length > 0) {
@@ -246,6 +281,256 @@ export default function ProjectDetailPage() {
     setProject({ ...project, project_address: address || null })
   }
 
+  // Helper to update metadata stored in notes as JSON
+  const updateMetadata = async (key: string, value: string) => {
+    if (!project) return
+
+    try {
+      // Parse existing notes or create new metadata object
+      let metadata: Record<string, string> = {}
+      let existingData: any = {}
+      
+      if (project.notes) {
+        try {
+          const parsed = JSON.parse(project.notes)
+          if (typeof parsed === 'object' && parsed !== null) {
+            if ('metadata' in parsed) {
+              metadata = parsed.metadata
+            }
+            // Preserve other fields in notes
+            existingData = { ...parsed }
+            delete existingData.metadata
+          }
+        } catch (e) {
+          // If notes is not JSON, create new structure
+        }
+      }
+
+      // Update the metadata key
+      metadata[key] = value || ''
+
+      // Create notes structure with metadata
+      const notesData = {
+        ...existingData,
+        metadata
+      }
+
+      // Save to database
+      await db.updateProject(projectId, { notes: JSON.stringify(notesData) })
+      
+      // Update local state
+      setProject({ ...project, notes: JSON.stringify(notesData) })
+    } catch (error) {
+      console.error('Error updating metadata:', error)
+      throw error
+    }
+  }
+
+  const handleUpdateProjectType = async (value: string) => {
+    await updateMetadata('project_type', value)
+  }
+
+  const handleUpdateYearBuilt = async (value: string) => {
+    await updateMetadata('year_built', value)
+  }
+
+  const handleUpdateHomeSize = async (value: string) => {
+    await updateMetadata('home_size', value)
+  }
+
+  const handleUpdateLotSize = async (value: string) => {
+    await updateMetadata('lot_size', value)
+  }
+
+  const handleUpdateBedrooms = async (value: string) => {
+    await updateMetadata('bedrooms', value)
+  }
+
+  const handleUpdateBathrooms = async (value: string) => {
+    await updateMetadata('bathrooms', value)
+  }
+
+  const handleUpdateJobStart = async (value: string) => {
+    await updateMetadata('job_start', value)
+  }
+
+  const handleUpdateJobDeadline = async (value: string) => {
+    await updateMetadata('job_deadline', value)
+  }
+
+  const handleUploadPhoto = async (file: File) => {
+    if (!user) throw new Error('User not authenticated')
+
+    // Dynamically import supabase to avoid webpack chunking issues
+    const { supabase } = await import('@/lib/supabase/client')
+
+    // Upload to Supabase Storage
+    // RLS policy requires user_id as first folder: user_id/photos/project_id/filename
+    const fileExt = file.name.split('.').pop()
+    const timestamp = Date.now()
+    const filePath = `${user.id}/photos/${projectId}/${timestamp}.${fileExt}`
+
+    const { error: uploadError } = await supabase.storage
+      .from('uploads')
+      .upload(filePath, file, {
+        contentType: file.type,
+        upsert: false
+      })
+
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError)
+      throw new Error(`Failed to upload photo: ${uploadError.message}`)
+    }
+
+    // Get public URL
+    const { data: { publicUrl } } = supabase.storage
+      .from('uploads')
+      .getPublicUrl(filePath)
+
+    // Create upload record in database with user_id
+    // Use supabase client directly to include user_id
+    // Note: user_id is required by RLS policy but not in TypeScript types yet
+    const { supabase: supabaseClient } = await import('@/lib/supabase/client')
+    const { data: newUpload, error: dbError } = await supabaseClient
+      .from('uploads')
+      .insert({
+        project_id: projectId,
+        file_url: publicUrl,
+        kind: 'photo',
+        user_id: user.id
+      } as any)
+      .select()
+      .single()
+
+    if (dbError) {
+      console.error('Database insert error:', dbError)
+      // Try to clean up the uploaded file
+      await supabase.storage.from('uploads').remove([filePath])
+      throw new Error(`Failed to save photo record: ${dbError.message}`)
+    }
+
+    // Update local state
+    setPhotos([...photos, { url: publicUrl, id: newUpload.id }])
+  }
+
+  const handleUploadDocument = async (file: File) => {
+    if (!user) throw new Error('User not authenticated')
+
+    // Dynamically import supabase to avoid webpack chunking issues
+    const { supabase } = await import('@/lib/supabase/client')
+
+    // Upload to Supabase Storage
+    // RLS policy requires user_id as first folder: user_id/documents/project_id/filename
+    const fileExt = file.name.split('.').pop()
+    const timestamp = Date.now()
+    const filePath = `${user.id}/documents/${projectId}/${timestamp}.${fileExt}`
+
+    const { error: uploadError } = await supabase.storage
+      .from('uploads')
+      .upload(filePath, file, {
+        contentType: file.type,
+        upsert: false
+      })
+
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError)
+      throw new Error(`Failed to upload document: ${uploadError.message}`)
+    }
+
+    // Get public URL
+    const { data: { publicUrl } } = supabase.storage
+      .from('uploads')
+      .getPublicUrl(filePath)
+
+    // Create upload record in database with user_id and original filename
+    // Use supabase client directly to include user_id and filename
+    // Note: user_id and filename are not in TypeScript types yet
+    const { supabase: supabaseClient } = await import('@/lib/supabase/client')
+    const { data: newUpload, error: dbError } = await supabaseClient
+      .from('uploads')
+      .insert({
+        project_id: projectId,
+        file_url: publicUrl,
+        kind: 'blueprint',
+        user_id: user.id,
+        original_filename: file.name // Store original filename
+      } as any)
+      .select()
+      .single()
+
+    if (dbError) {
+      console.error('Database insert error:', dbError)
+      // Try to clean up the uploaded file
+      await supabase.storage.from('uploads').remove([filePath])
+      throw new Error(`Failed to save document record: ${dbError.message}`)
+    }
+
+    // Update local state with original filename
+    setDocuments([...documents, { url: publicUrl, name: file.name, id: newUpload.id }])
+  }
+
+  const handleDeletePhoto = async (id: string) => {
+    // Find the upload to get the file path
+    const uploads = await db.getUploads(projectId)
+    const upload = uploads.find(u => u.id === id && u.kind === 'photo')
+    
+    if (!upload) throw new Error('Photo not found')
+
+    // Dynamically import supabase to avoid webpack chunking issues
+    const { supabase } = await import('@/lib/supabase/client')
+
+    // Extract file path from URL
+    const urlParts = upload.file_url.split('/')
+    const filePath = urlParts.slice(urlParts.indexOf('uploads') + 1).join('/')
+
+    // Delete from storage
+    const { error: storageError } = await supabase.storage
+      .from('uploads')
+      .remove([filePath])
+
+    if (storageError) {
+      console.error('Error deleting from storage:', storageError)
+      // Continue with database deletion even if storage deletion fails
+    }
+
+    // Delete from database
+    await db.deleteUpload(id)
+
+    // Update local state
+    setPhotos(photos.filter(p => p.id !== id))
+  }
+
+  const handleDeleteDocument = async (id: string) => {
+    // Find the upload to get the file path
+    const uploads = await db.getUploads(projectId)
+    const upload = uploads.find(u => u.id === id && u.kind === 'blueprint')
+    
+    if (!upload) throw new Error('Document not found')
+
+    // Dynamically import supabase to avoid webpack chunking issues
+    const { supabase } = await import('@/lib/supabase/client')
+
+    // Extract file path from URL
+    const urlParts = upload.file_url.split('/')
+    const filePath = urlParts.slice(urlParts.indexOf('uploads') + 1).join('/')
+
+    // Delete from storage
+    const { error: storageError } = await supabase.storage
+      .from('uploads')
+      .remove([filePath])
+
+    if (storageError) {
+      console.error('Error deleting from storage:', storageError)
+      // Continue with database deletion even if storage deletion fails
+    }
+
+    // Delete from database
+    await db.deleteUpload(id)
+
+    // Update local state
+    setDocuments(documents.filter(d => d.id !== id))
+  }
+
   if (isLoading) {
     return (
       <AuthGuard>
@@ -354,10 +639,26 @@ export default function ProjectDetailPage() {
                   project={project}
                   activeEstimate={activeEstimate}
                   estimates={estimates}
+                  photos={photos}
+                  documents={documents}
                   onUpdateTitle={handleUpdateProjectTitle}
                   onUpdateOwner={handleUpdateProjectOwner}
                   onUpdateAddress={handleUpdateProjectAddress}
+                  onUpdateProjectType={handleUpdateProjectType}
+                  onUpdateYearBuilt={handleUpdateYearBuilt}
+                  onUpdateHomeSize={handleUpdateHomeSize}
+                  onUpdateLotSize={handleUpdateLotSize}
+                  onUpdateBedrooms={handleUpdateBedrooms}
+                  onUpdateBathrooms={handleUpdateBathrooms}
+                  onUpdateJobStart={handleUpdateJobStart}
+                  onUpdateJobDeadline={handleUpdateJobDeadline}
+                  onUploadPhoto={handleUploadPhoto}
+                  onUploadDocument={handleUploadDocument}
+                  onDeletePhoto={handleDeletePhoto}
+                  onDeleteDocument={handleDeleteDocument}
                   onNavigateToEstimate={() => setActiveTab("estimate")}
+                  onNavigateToPhotos={() => setActiveTab("photos")}
+                  onNavigateToDocuments={() => setActiveTab("documents")}
                 />
               </TabsContent>
 
