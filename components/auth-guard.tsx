@@ -20,7 +20,7 @@ export function AuthGuard({ children, requireAuth = true }: AuthGuardProps) {
         router.push('/auth/login')
       }
       if (!requireAuth && user) {
-        router.push('/dashboard')
+        router.push('/projects')
       }
     }
   }, [user, loading, requireAuth, router])

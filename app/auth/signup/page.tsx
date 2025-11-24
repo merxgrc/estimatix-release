@@ -26,7 +26,7 @@ export default function SignupPage() {
   // Redirect if already authenticated
   useEffect(() => {
     if (user) {
-      router.push('/dashboard')
+      router.push('/projects')
     }
   }, [user, router])
 
