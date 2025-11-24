@@ -9,13 +9,17 @@ import { UserMenu } from "@/components/user-menu"
 import { AuthGuard } from "@/components/auth-guard"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/db-client"
-import { EstimateTable } from "@/components/estimate/EstimateTable"
-import { Recorder } from "@/components/voice/Recorder"
 import { EditableProjectTitle } from "@/components/editable-project-title"
-import { EditableField } from "@/components/editable-field"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { SummaryTab } from "./_components/SummaryTab"
+import { EstimateTab } from "./_components/EstimateTab"
+import { RoomsTab } from "./_components/RoomsTab"
+import { PhotosTab } from "./_components/PhotosTab"
+import { DocumentsTab } from "./_components/DocumentsTab"
+import { WalkTab } from "./_components/WalkTab"
+import { ProposalsTab } from "./_components/ProposalsTab"
 import type { Project, Estimate } from "@/types/db"
-import { ArrowLeft, Calendar, FileText, DollarSign, Plus, Trash2, Mic, MapPin, User } from "lucide-react"
-import Link from "next/link"
+import { ArrowLeft, Trash2 } from "lucide-react"
 
 export default function ProjectDetailPage() {
   const router = useRouter()
@@ -30,8 +34,8 @@ export default function ProjectDetailPage() {
   const [activeEstimateId, setActiveEstimateId] = useState<string | null>(null)
   const [deletingProject, setDeletingProject] = useState(false)
   const [deletingEstimateId, setDeletingEstimateId] = useState<string | null>(null)
-  const [showRecorder, setShowRecorder] = useState(false)
   const [isParsing, setIsParsing] = useState(false)
+  const [activeTab, setActiveTab] = useState("summary")
 
   useEffect(() => {
     const fetchProjectData = async () => {
@@ -271,9 +275,9 @@ export default function ProjectDetailPage() {
                 <CardDescription>{error || 'Project not found'}</CardDescription>
               </CardHeader>
               <CardContent className="flex gap-4">
-                <Button onClick={() => router.push('/dashboard')} variant="outline">
+                <Button onClick={() => router.push('/projects')} variant="outline">
                   <ArrowLeft className="mr-2 h-4 w-4" />
-                  Back to Dashboard
+                  Back to Projects
                 </Button>
                 <Button onClick={() => window.location.reload()} variant="outline">
                   Retry
@@ -287,7 +291,6 @@ export default function ProjectDetailPage() {
   }
 
   const activeEstimate = activeEstimateId ? estimates.find(e => e.id === activeEstimateId) : null
-  const estimateData = activeEstimate?.json_data as any || { items: [], assumptions: [], missing_info: [] }
 
   return (
     <AuthGuard>
@@ -299,7 +302,7 @@ export default function ProjectDetailPage() {
           <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="flex h-16 items-center justify-between px-4 md:px-6">
               <div className="flex items-center gap-4">
-                <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')}>
+                <Button variant="ghost" size="sm" onClick={() => router.push('/projects')}>
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back
                 </Button>
@@ -334,224 +337,66 @@ export default function ProjectDetailPage() {
           </header>
 
           {/* Main Content */}
-          <main className="p-4 md:p-6 space-y-6">
-            {/* Project Info Card */}
-            <Card>
-              <CardHeader>
-                <EditableProjectTitle
-                  title={project.title}
-                  onSave={handleUpdateProjectTitle}
-                  variant="card"
-                  className="mb-0"
+          <main className="p-4 md:p-6">
+            {/* Tab Navigation */}
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+              <TabsList className="w-full grid grid-cols-7 gap-1">
+                <TabsTrigger value="summary">Summary</TabsTrigger>
+                <TabsTrigger value="estimate">Estimate</TabsTrigger>
+                <TabsTrigger value="rooms">Rooms</TabsTrigger>
+                <TabsTrigger value="photos">Photos</TabsTrigger>
+                <TabsTrigger value="documents">Documents</TabsTrigger>
+                <TabsTrigger value="walk">Walk-n-Talk</TabsTrigger>
+                <TabsTrigger value="proposals">Proposals</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="summary">
+                <SummaryTab
+                  project={project}
+                  activeEstimate={activeEstimate}
+                  estimates={estimates}
+                  onUpdateTitle={handleUpdateProjectTitle}
+                  onUpdateOwner={handleUpdateProjectOwner}
+                  onUpdateAddress={handleUpdateProjectAddress}
+                  onNavigateToEstimate={() => setActiveTab("estimate")}
                 />
-                <CardDescription>
-                  <div className="space-y-3 mt-3">
-                    <EditableField
-                      label="Owner"
-                      value={project.owner_name}
-                      onSave={handleUpdateProjectOwner}
-                      placeholder="Property owner name"
-                    />
-                    <EditableField
-                      label="Address"
-                      value={project.project_address}
-                      onSave={handleUpdateProjectAddress}
-                      placeholder="Property address"
-                      multiline
-                    />
-                  </div>
-                  {project.client_name && (
-                    <div className="mt-3">
-                      <span className="text-sm text-muted-foreground">Client: {project.client_name}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-4 mt-3 text-sm">
-                    <div className="flex items-center text-muted-foreground">
-                      <Calendar className="mr-2 h-4 w-4" />
-                      Created {new Date(project.created_at).toLocaleDateString('en-US', {
-                        month: 'long',
-                        day: 'numeric',
-                        year: 'numeric'
-                      })}
-                    </div>
-                    {estimates.length > 0 && (
-                      <div className="flex items-center text-muted-foreground">
-                        <FileText className="mr-2 h-4 w-4" />
-                        {estimates.length} {estimates.length === 1 ? 'estimate' : 'estimates'}
-                      </div>
-                    )}
-                    {activeEstimate?.total && (
-                      <div className="flex items-center text-muted-foreground">
-                        <DollarSign className="mr-2 h-4 w-4" />
-                        ${activeEstimate.total.toLocaleString()}
-                      </div>
-                    )}
-                  </div>
-                </CardDescription>
-              </CardHeader>
-              {project.notes && (
-                <CardContent>
-                  <p className="text-sm text-muted-foreground whitespace-pre-line">
-                    {project.notes}
-                  </p>
-                </CardContent>
-              )}
-            </Card>
+              </TabsContent>
 
-            {/* Estimates Section - Always show the estimate interface */}
-            <div className="space-y-4">
-              {/* Create Estimate Button */}
-              <div className="flex justify-end">
-                <Button
-                  onClick={() => setShowRecorder(!showRecorder)}
-                  variant="default"
-                  disabled={isParsing}
-                >
-                  {isParsing ? (
-                    <>
-                      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                      Creating Estimate...
-                    </>
-                  ) : (
-                    <>
-                      <Mic className="mr-2 h-4 w-4" />
-                      {showRecorder ? 'Cancel Recording' : 'Create Estimate with Voice'}
-                    </>
-                  )}
-                </Button>
-              </div>
-
-              {/* Recorder Component */}
-              {showRecorder && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Record Project Description</CardTitle>
-                    <CardDescription>
-                      Describe your project by voice. The AI will parse your description and create line items.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <Recorder
-                      projectId={projectId}
-                      onRecordingComplete={handleRecordingComplete}
-                    />
-                  </CardContent>
-                </Card>
-              )}
-              {estimates.length > 1 && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Select Estimate</CardTitle>
-                    <CardDescription>
-                      Choose which estimate to view or edit
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex flex-wrap gap-2">
-                      {estimates.map((estimate) => (
-                        <div key={estimate.id} className="flex items-center gap-1">
-                          <Button
-                            variant={activeEstimateId === estimate.id ? "default" : "outline"}
-                            onClick={() => setActiveEstimateId(estimate.id)}
-                            className="flex items-center gap-2"
-                          >
-                            <FileText className="h-4 w-4" />
-                            {new Date(estimate.created_at).toLocaleDateString('en-US', {
-                              month: 'short',
-                              day: 'numeric'
-                            })}
-                            {estimate.total && (
-                              <span className="ml-2">${estimate.total.toLocaleString()}</span>
-                            )}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteEstimate(estimate.id)}
-                            disabled={deletingEstimateId === estimate.id}
-                            className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                          >
-                            {deletingEstimateId === estimate.id ? (
-                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-destructive border-t-transparent" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
-                            )}
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {activeEstimate && activeEstimate.ai_summary && (
-                <Card>
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-lg">AI Summary</CardTitle>
-                      {estimates.length === 1 && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDeleteEstimate(activeEstimate.id)}
-                          disabled={deletingEstimateId === activeEstimate.id}
-                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                        >
-                          {deletingEstimateId === activeEstimate.id ? (
-                            <>
-                              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-destructive border-t-transparent" />
-                              Deleting...
-                            </>
-                          ) : (
-                            <>
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete Estimate
-                            </>
-                          )}
-                        </Button>
-                      )}
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm text-muted-foreground">
-                      {activeEstimate.ai_summary}
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
-
-              <div className="relative">
-                {estimates.length > 1 && activeEstimateId && (
-                  <div className="absolute top-0 right-0 z-10">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDeleteEstimate(activeEstimateId)}
-                      disabled={deletingEstimateId === activeEstimateId}
-                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                    >
-                      {deletingEstimateId === activeEstimateId ? (
-                        <>
-                          <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-destructive border-t-transparent" />
-                          Deleting...
-                        </>
-                      ) : (
-                        <>
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Delete Estimate
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                )}
-                <EstimateTable
+              <TabsContent value="estimate">
+                <EstimateTab
+                  project={project}
                   projectId={projectId}
-                  estimateId={activeEstimateId}
-                  initialData={estimateData || { items: [], assumptions: [], missing_info: [] }}
+                  estimates={estimates}
+                  activeEstimateId={activeEstimateId}
+                  setActiveEstimateId={setActiveEstimateId}
+                  deletingEstimateId={deletingEstimateId}
+                  onDeleteEstimate={handleDeleteEstimate}
                   onSave={handleEstimateSave}
+                  onRecordingComplete={handleRecordingComplete}
+                  isParsing={isParsing}
                 />
-              </div>
-            </div>
+              </TabsContent>
+
+              <TabsContent value="rooms">
+                <RoomsTab project={project} />
+              </TabsContent>
+
+              <TabsContent value="photos">
+                <PhotosTab project={project} />
+              </TabsContent>
+
+              <TabsContent value="documents">
+                <DocumentsTab project={project} />
+              </TabsContent>
+
+              <TabsContent value="walk">
+                <WalkTab project={project} />
+              </TabsContent>
+
+              <TabsContent value="proposals">
+                <ProposalsTab project={project} />
+              </TabsContent>
+            </Tabs>
           </main>
         </div>
       </div>

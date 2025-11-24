@@ -20,7 +20,7 @@ const navigation = [
 export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
-  const { user } = useAuth()
+  const { user, signOut } = useAuth()
   const [isCreatingProject, setIsCreatingProject] = useState(false)
 
   const handleCreateProject = async () => {
@@ -104,15 +104,35 @@ export function Sidebar() {
           <div className="border-t border-border p-4">
             <div className="mb-3 flex items-center gap-3 px-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
-                U
+                {user?.user_metadata?.full_name 
+                  ? user.user_metadata.full_name.charAt(0).toUpperCase()
+                  : user?.email 
+                    ? user.email.charAt(0).toUpperCase()
+                    : 'U'}
               </div>
-              <div className="flex-1 text-sm">
-                <p className="font-medium">User Name</p>
-                <p className="text-xs text-muted-foreground">user@example.com</p>
+              <div className="flex-1 text-sm min-w-0">
+                <p className="font-medium truncate">
+                  {user?.user_metadata?.full_name || user?.user_metadata?.name || 'User'}
+                </p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {user?.email || 'No email'}
+                </p>
               </div>
             </div>
-            {/* TODO: Implement logout functionality with Supabase auth */}
-            <Button variant="ghost" className="w-full justify-start" size="sm">
+            <Button 
+              variant="ghost" 
+              className="w-full justify-start" 
+              size="sm"
+              onClick={async () => {
+                try {
+                  await signOut()
+                  router.push('/auth/login')
+                } catch (err) {
+                  console.error('Error signing out:', err)
+                  alert('Failed to sign out. Please try again.')
+                }
+              }}
+            >
               <LogOut className="mr-2 h-4 w-4" />
               Sign Out
             </Button>
