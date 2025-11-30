@@ -123,6 +123,10 @@ export interface Database {
           unit_cost: number | null
           total: number | null
           cost_code: string | null
+          category: string | null
+          labor_cost: number | null
+          margin_percent: number | null
+          client_price: number | null
           created_at: string
           updated_at: string
         }
@@ -138,6 +142,10 @@ export interface Database {
           unit_cost?: number | null
           total?: number | null
           cost_code?: string | null
+          category?: string | null
+          labor_cost?: number | null
+          margin_percent?: number | null
+          client_price?: number | null
           created_at?: string
           updated_at?: string
         }
@@ -153,6 +161,10 @@ export interface Database {
           unit_cost?: number | null
           total?: number | null
           cost_code?: string | null
+          category?: string | null
+          labor_cost?: number | null
+          margin_percent?: number | null
+          client_price?: number | null
           created_at?: string
           updated_at?: string
         }

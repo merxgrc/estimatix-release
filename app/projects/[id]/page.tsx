@@ -196,7 +196,14 @@ export default function ProjectDetailPage() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || `Parse failed: ${response.status}`)
+        const errorMessage = errorData.error || `Parse failed: ${response.status}`
+        
+        // Provide user-friendly messages for common errors
+        if (response.status === 502 || response.status === 503 || response.status === 504) {
+          throw new Error(`Service temporarily unavailable. The AI parsing service is experiencing issues. Please try again in a few moments. (${errorMessage})`)
+        }
+        
+        throw new Error(errorMessage)
       }
 
       const result = await response.json()

@@ -162,69 +162,85 @@ function transformItemsToSections(jsonData: any): any[] {
     return [];
   }
 
-  // Group items by category, preserving cost code information
-  const itemsByCategory = new Map<string, { items: any[], costCode?: string }>();
+  // Group atomic line items by cost_code (trade) then by room_name
+  const itemsByCostCode = new Map<string, Map<string, any[]>>();
   
   jsonData.items.forEach((item: any) => {
-    const category = item.category || 'Other';
-    const costCode = getCostCodeForItem(item);
+    const costCode = item.cost_code || getCostCodeForItem(item) || '999';
+    const roomName = item.room_name || item.room || 'General';
     
-    if (!itemsByCategory.has(category)) {
-      itemsByCategory.set(category, { items: [], costCode });
+    if (!itemsByCostCode.has(costCode)) {
+      itemsByCostCode.set(costCode, new Map());
     }
-    itemsByCategory.get(category)!.items.push(item);
-    // Use the first cost code found for this category
-    if (costCode && !itemsByCategory.get(category)!.costCode) {
-      itemsByCategory.get(category)!.costCode = costCode;
+    
+    const roomsMap = itemsByCostCode.get(costCode)!;
+    if (!roomsMap.has(roomName)) {
+      roomsMap.set(roomName, []);
     }
+    
+    roomsMap.get(roomName)!.push(item);
   });
 
-  // Convert each category group into a section
+  // Get trade title mapping
+  const tradeTitleMap: Record<string, string> = {
+    '201': 'DEMO',
+    '305': 'FRAMING',
+    '402': 'HVAC',
+    '404': 'PLUMBING',
+    '405': 'ELECTRICAL',
+    '520': 'WINDOWS',
+    '530': 'DOORS',
+    '640': 'CABINETS',
+    '641': 'COUNTERTOPS',
+    '950': 'TILE',
+    '960': 'FLOORING',
+    '990': 'PAINT',
+    '999': 'OTHER'
+  };
+
+  // Convert grouped items into sections
   const sections: any[] = [];
-  let sectionCode = 100;
 
-  itemsByCategory.forEach(({ items, costCode }, category) => {
-    const sectionItems = items.map((item: any) => {
-      // Format description with quantity using the helper function
-      let desc = formatProposalBullet({ description: item.description }, item);
+  itemsByCostCode.forEach((roomsMap, costCode) => {
+    // Build section items grouped by room
+    const sectionItems: any[] = [];
+    
+    // Sort rooms for consistent ordering
+    const sortedRooms = Array.from(roomsMap.keys()).sort();
+    
+    sortedRooms.forEach(roomName => {
+      const roomItems = roomsMap.get(roomName)!;
       
-      // Add dimensions if present (but don't duplicate quantity info)
-      if (item.dimensions) {
-        const dims = item.dimensions;
-        const dimStr = dims.depth 
-          ? `${dims.width}×${dims.height}×${dims.depth} ${dims.unit}`
-          : `${dims.width}×${dims.height} ${dims.unit}`;
-        desc = `${desc} (${dimStr})`;
-      }
-      
-      // Note: Removed unit_cost and total from description as they're not needed in proposal bullets
-      // The allowance is shown in the section header instead
-
-      return {
-        text: desc,
-        ...(item.notes ? { subitems: [item.notes] } : {})
-      };
+      // Each room becomes an item with subitems (atomic tasks)
+      sectionItems.push({
+        text: roomName,
+        label: roomName,
+        subitems: roomItems.map((item: any) => item.description || '').filter((desc: string) => desc.trim().length > 0)
+      });
     });
 
     // Calculate allowance if this section is allowance-eligible
     let allowance: number | null = null;
-    if (costCode && isAllowanceCostCode(costCode)) {
-      // Sum all item totals for this section
-      const sectionTotal = items.reduce((sum, item) => {
-        return sum + (item.total || 0);
-      }, 0);
+    if (isAllowanceCostCode(costCode)) {
+      // Sum all client_price values for this section (if available)
+      const sectionTotal = Array.from(roomsMap.values())
+        .flat()
+        .reduce((sum: number, item: any) => {
+          return sum + (item.client_price || item.total || 0);
+        }, 0);
       allowance = sectionTotal > 0 ? sectionTotal : null;
     }
 
     sections.push({
-      code: costCode || sectionCode.toString(),
-      title: category.toUpperCase(),
+      code: costCode,
+      title: tradeTitleMap[costCode] || 'OTHER',
       allowance: allowance,
       items: sectionItems
     });
-
-    sectionCode += 10;
   });
+
+  // Sort sections by cost code
+  sections.sort((a, b) => a.code.localeCompare(b.code));
 
   return sections;
 }
@@ -431,7 +447,28 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
     }
 
     const jsonData = estimate.json_data as any;
-    const allItems = jsonData?.items || [];
+    let allItems = jsonData?.items || [];
+
+    // Try to fetch line items from estimate_line_items table (authoritative source)
+    const { data: lineItemsData } = await supabase
+      .from('estimate_line_items')
+      .select('*')
+      .eq('estimate_id', estimateId)
+      .order('created_at', { ascending: true });
+
+    if (lineItemsData && lineItemsData.length > 0) {
+      // Use line items from database (more accurate)
+      allItems = lineItemsData.map(item => ({
+        category: item.category || 'Other',
+        description: item.description || '',
+        cost_code: item.cost_code || '999',
+        room_name: item.room_name || 'General',
+        labor_cost: item.labor_cost || null,
+        margin_percent: item.margin_percent || null,
+        client_price: item.client_price || null
+      }));
+      console.log('[PDF] Using estimate_line_items from database:', allItems.length, 'items');
+    }
 
     // Use spec_sections from database, or fallback to transformed json_data
     let sections: any[] = [];
@@ -441,27 +478,22 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       sections = estimate.spec_sections;
       console.log('[PDF] Using spec_sections from database:', JSON.stringify(sections, null, 2));
       
-      // Enhance sections with allowance calculations and quantity formatting
+      // Enhance sections with allowance calculations
       sections = sections.map(section => {
         const costCode = section.code || '';
         const shouldShowAllowance = isAllowanceCostCode(costCode);
         
-        // Find matching items for this section to get quantities
+        // Find matching items for this section to calculate allowance
         const matchingItems = allItems.filter((item: any) => {
-          const itemCostCode = getCostCodeForItem(item);
-          const sectionTitleUpper = (section.title || '').toUpperCase();
-          const itemCategoryUpper = (item.category || '').toUpperCase();
-          
-          return itemCostCode === costCode || 
-                 itemCategoryUpper === sectionTitleUpper ||
-                 (sectionTitleUpper.includes(itemCategoryUpper) || itemCategoryUpper.includes(sectionTitleUpper));
+          const itemCostCode = item.cost_code || getCostCodeForItem(item);
+          return itemCostCode === costCode;
         });
         
         if (shouldShowAllowance) {
           // If allowance is not explicitly set, calculate it from matching items
           if (section.allowance === null || section.allowance === undefined) {
             const calculatedTotal = matchingItems.reduce((sum: number, item: any) => {
-              return sum + (item.total || 0);
+              return sum + (item.client_price || item.total || 0);
             }, 0);
             
             if (calculatedTotal > 0) {
@@ -473,56 +505,9 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
           section.allowance = null;
         }
         
-        // Enhance section items with quantities from matching line items
-        if (section.items && Array.isArray(section.items)) {
-          section.items = section.items.map((item: any) => {
-            const itemText = (item.text || '').toLowerCase();
-            
-            // Skip if text already contains formatted quantity (has <strong> tags)
-            if (itemText.includes('<strong>')) {
-              return item;
-            }
-            
-            // Skip if text already starts with a number pattern (e.g., "7x", "120 sq ft")
-            if (/^(\d+)\s*(x|×|sq\s*ft|sq\s*yd|linear\s*ft)/i.test(itemText)) {
-              return item;
-            }
-            
-            // Try to find a matching original item for this proposal item
-            let matchingItem: any = null;
-            if (matchingItems.length > 0) {
-              matchingItem = matchingItems.find((origItem: any) => {
-                const origDesc = (origItem.description || '').toLowerCase();
-                // Check if descriptions are similar (contain common words)
-                const itemWords = itemText.split(/\s+/).filter((w: string) => w.length > 3);
-                const origWords = origDesc.split(/\s+/).filter((w: string) => w.length > 3);
-                const commonWords = itemWords.filter((w: string) => origWords.includes(w));
-                return commonWords.length > 0 || itemText.includes(origDesc) || origDesc.includes(itemText);
-              });
-            }
-            
-            // Format the text with quantity if we found a match
-            if (matchingItem && item.text) {
-              const formattedText = formatProposalBullet({ text: item.text }, matchingItem);
-              return {
-                ...item,
-                text: formattedText
-              };
-            }
-            
-            // If no match but item has quantity info, use it
-            if (item.quantity || item.qty) {
-              const formattedText = formatProposalBullet(item, item);
-              return {
-                ...item,
-                text: formattedText
-              };
-            }
-            
-            // No quantity available, return as-is
-            return item;
-          });
-        }
+        // Note: With atomic line items, section.items already contain room groupings with subitems
+        // No need to enhance with quantities since each subitem is already an atomic task description
+        // The AI parser creates spec_sections with proper room → subitems structure
         
         return section;
       });

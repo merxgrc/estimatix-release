@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -12,19 +12,45 @@ import { Save, AlertTriangle, Plus, Trash2, FileText, Download } from 'lucide-re
 import { supabase } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/auth-context'
 
+// Cost code categories
+const COST_CATEGORIES = [
+  { label: "Demo (201)", code: "201" },
+  { label: "Framing (305)", code: "305" },
+  { label: "Plumbing (404)", code: "404" },
+  { label: "Electrical (405)", code: "405" },
+  { label: "HVAC (402)", code: "402" },
+  { label: "Windows (520)", code: "520" },
+  { label: "Doors (530)", code: "530" },
+  { label: "Cabinets (640)", code: "640" },
+  { label: "Countertops (641)", code: "641" },
+  { label: "Tile (950)", code: "950" },
+  { label: "Flooring (960)", code: "960" },
+  { label: "Paint (990)", code: "990" },
+  { label: "Other (999)", code: "999" }
+]
+
+// Room options
+const ROOM_OPTIONS = [
+  "Primary Bedroom", "Primary Bath",
+  "Bedroom 1", "Bath 1",
+  "Bedroom 2", "Bath 2",
+  "Bedroom 3", "Bath 3",
+  "Guest Bedroom", "Guest Bath",
+  "Powder", "Kitchen", "Pantry",
+  "Living/Family", "Dining",
+  "Mudroom", "Pool Bath",
+  "Bar", "Garage"
+]
+
 interface LineItem {
-  category: 'Windows' | 'Doors' | 'Cabinets' | 'Flooring' | 'Plumbing' | 'Electrical' | 'Other'
+  id?: string
+  room_name: string
   description: string
-  quantity: number
-  dimensions?: {
-    unit: 'in' | 'ft' | 'cm' | 'm'
-    width: number
-    height: number
-    depth?: number
-  } | null
-  unit_cost?: number
-  total?: number
-  notes?: string
+  category: string
+  cost_code: string
+  labor_cost: number
+  margin_percent: number
+  client_price: number
 }
 
 interface EstimateData {
@@ -47,7 +73,7 @@ interface EstimateTableProps {
 }
 
 export function EstimateTable({ projectId, estimateId, initialData, onSave, projectMetadata }: EstimateTableProps) {
-  const [items, setItems] = useState<LineItem[]>(initialData?.items || [])
+  const [items, setItems] = useState<LineItem[]>([])
   const [missingInfo, setMissingInfo] = useState<string[]>(initialData?.missing_info || [])
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
@@ -57,42 +83,102 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
   const [blockedActionMessage, setBlockedActionMessage] = useState<string | null>(null)
   const { user } = useAuth()
 
-  // Update items and missingInfo when initialData changes
+  // Load line items from database on mount
+  useEffect(() => {
+    const loadLineItems = async () => {
+      if (estimateId && projectId) {
+        try {
+          const { data, error } = await supabase
+            .from('estimate_line_items')
+            .select('*')
+            .eq('estimate_id', estimateId)
+            .order('created_at', { ascending: true })
+
+          if (error) {
+            console.error('Error loading line items:', error)
+            // Fallback to initialData if database load fails
+            if (initialData?.items) {
+              setItems(initialData.items.map((item, idx) => ({
+                id: `temp-${idx}`,
+                room_name: '',
+                description: item.description || '',
+                category: item.category || 'Other (999)',
+                cost_code: '999',
+                labor_cost: (item as any).labor_cost || 0,
+                margin_percent: (item as any).margin_percent || 30,
+                client_price: (item as any).client_price || 0
+              })))
+            }
+            return
+          }
+
+          if (data && data.length > 0) {
+            // Load from database
+            setItems(data.map(item => ({
+              id: item.id,
+              room_name: item.room_name || '',
+              description: item.description || '',
+              category: item.category || COST_CATEGORIES.find(c => c.code === item.cost_code)?.label || 'Other (999)',
+              cost_code: item.cost_code || '999',
+              labor_cost: item.labor_cost || 0,
+              margin_percent: item.margin_percent || 30,
+              client_price: item.client_price || 0
+            })))
+          } else if (initialData?.items) {
+            // Fallback to initialData
+            setItems(initialData.items.map((item, idx) => ({
+              id: `temp-${idx}`,
+              room_name: '',
+              description: item.description || '',
+              category: item.category || 'Other (999)',
+              cost_code: '999',
+              labor_cost: (item as any).labor_cost || 0,
+              margin_percent: (item as any).margin_percent || 30,
+              client_price: (item as any).client_price || 0
+            })))
+          }
+        } catch (err) {
+          console.error('Error in loadLineItems:', err)
+        }
+      } else if (initialData?.items) {
+        // Use initialData if no estimateId
+        setItems(initialData.items.map((item, idx) => ({
+          id: `temp-${idx}`,
+          room_name: '',
+          description: item.description || '',
+          category: item.category || 'Other (999)',
+          cost_code: '999',
+          labor_cost: (item as any).labor_cost || 0,
+          margin_percent: (item as any).margin_percent || 30,
+          client_price: (item as any).client_price || 0
+        })))
+      }
+    }
+
+    loadLineItems()
+  }, [estimateId, projectId, initialData])
+
+  // Update items when initialData changes
   useEffect(() => {
     if (initialData) {
-      setItems(initialData.items || [])
       setMissingInfo(initialData.missing_info || [])
-    } else {
-      setItems([])
-      setMissingInfo([])
     }
   }, [initialData])
 
-  // Auto-compute totals when items change
-  useEffect(() => {
-    setItems(prevItems => 
-      prevItems.map(item => ({
-        ...item,
-        total: item.unit_cost && item.quantity ? item.unit_cost * item.quantity : undefined
-      }))
-    )
-  }, [])
-
-  const updateItem = (index: number, field: keyof LineItem, value: any) => {
+  // Auto-calculate client_price when labor_cost or margin_percent changes
+  const updateItem = (index: number, updates: Partial<LineItem>) => {
     setItems(prevItems => {
       const newItems = [...prevItems]
       const item = { ...newItems[index] }
       
-      if (field === 'unit_cost' || field === 'quantity') {
-        (item as any)[field] = value
-        // Auto-compute total
-        if (item.unit_cost && item.quantity) {
-          item.total = item.unit_cost * item.quantity
-        } else {
-          item.total = undefined
-        }
-      } else {
-        (item as any)[field] = value
+      // Apply updates
+      Object.assign(item, updates)
+      
+      // Auto-calculate client_price if labor_cost or margin_percent changed
+      if (updates.labor_cost !== undefined || updates.margin_percent !== undefined) {
+        const laborCost = updates.labor_cost !== undefined ? updates.labor_cost : item.labor_cost
+        const marginPercent = updates.margin_percent !== undefined ? updates.margin_percent : item.margin_percent
+        item.client_price = Number(laborCost) * (1 + Number(marginPercent) / 100)
       }
       
       newItems[index] = item
@@ -104,13 +190,13 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     setItems(prevItems => [
       ...prevItems,
       {
-        category: 'Other',
+        room_name: '',
         description: '',
-        quantity: 1,
-        dimensions: null,
-        unit_cost: undefined,
-        total: undefined,
-        notes: ''
+        category: 'Other (999)',
+        cost_code: '999',
+        labor_cost: 0,
+        margin_percent: 30,
+        client_price: 0
       }
     ])
   }
@@ -119,7 +205,38 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     setItems(prevItems => prevItems.filter((_, i) => i !== index))
   }
 
-  const grandTotal = items.reduce((sum, item) => sum + (item.total || 0), 0)
+  const grandTotal = items.reduce((sum, item) => sum + (item.client_price || 0), 0)
+
+  // Auto-expanding textarea component
+  const AutoExpandingTextarea = ({ value, onChange, placeholder }: { value: string, onChange: (value: string) => void, placeholder?: string }) => {
+    const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+    const handleInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
+      const textarea = e.currentTarget
+      textarea.style.height = 'auto'
+      textarea.style.height = textarea.scrollHeight + 'px'
+      onChange(textarea.value)
+    }
+
+    useEffect(() => {
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto'
+        textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px'
+      }
+    }, [value])
+
+    return (
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onInput={handleInput}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 border rounded resize-none overflow-hidden min-h-[40px]"
+        rows={1}
+      />
+    )
+  }
 
   const saveEstimate = async () => {
     const hasItems = items.length > 0
@@ -135,97 +252,123 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       return
     }
 
+    if (!projectId) {
+      setError('Project ID is required')
+      return
+    }
+
     setIsSaving(true)
     setError(null)
+    setSaveSuccess(false)
 
     try {
-      const estimateData: EstimateData = {
-        items,
-        assumptions: initialData?.assumptions || [],
-        missing_info: missingInfo
-      }
+      let currentEstimateId = estimateId
 
-      // If we have an existing estimate ID, update it directly
-      if (estimateId) {
-        const { data, error: updateError } = await supabase
+      // Ensure we have an estimate record first
+      if (!currentEstimateId) {
+        const estimateData: any = {
+          project_id: projectId,
+          json_data: {
+            items: items,
+            assumptions: initialData?.assumptions || [],
+            missing_info: missingInfo
+          },
+          total: grandTotal,
+          ai_summary: `Estimate with ${items.length} line items`
+        }
+
+        const { data: newEstimate, error: insertError } = await supabase
+          .from('estimates')
+          .insert(estimateData)
+          .select()
+          .single()
+
+        if (insertError) {
+          throw new Error(`Failed to create estimate: ${insertError.message}`)
+        }
+
+        currentEstimateId = newEstimate.id
+      } else {
+        // Update existing estimate
+        const { error: updateError } = await supabase
           .from('estimates')
           .update({
-            json_data: estimateData,
+            json_data: {
+              items: items,
+              assumptions: initialData?.assumptions || [],
+              missing_info: missingInfo
+            },
             total: grandTotal,
             ai_summary: `Updated estimate with ${items.length} line items`
           })
-          .eq('id', estimateId)
-          .select()
-          .single()
+          .eq('id', currentEstimateId)
 
         if (updateError) {
           throw new Error(`Failed to update estimate: ${updateError.message}`)
         }
-
-        setSaveSuccess(true)
-        onSave?.(data.id, grandTotal)
-        return
       }
 
-      // If we have initialData and a valid projectId, try to find existing estimate
-      if (initialData && projectId && projectId !== 'null') {
-        const { data: existingEstimate, error: fetchError } = await supabase
-          .from('estimates')
-          .select('id')
-          .eq('project_id', projectId)
-          .single()
-
-        if (fetchError && fetchError.code !== 'PGRST116') {
-          throw new Error(`Failed to fetch existing estimate: ${fetchError.message}`)
+      // Upsert line items into estimate_line_items table
+      const lineItemsToSave = items.map(item => {
+        const categoryInfo = COST_CATEGORIES.find(c => c.code === item.cost_code) || COST_CATEGORIES[COST_CATEGORIES.length - 1]
+        
+        return {
+          ...(item.id && !item.id.startsWith('temp-') ? { id: item.id } : {}),
+          estimate_id: currentEstimateId,
+          project_id: projectId,
+          room_name: item.room_name || null,
+          description: item.description || null,
+          category: categoryInfo.label,
+          cost_code: item.cost_code,
+          labor_cost: item.labor_cost || 0,
+          margin_percent: item.margin_percent || 30,
+          client_price: item.client_price || 0
         }
+      })
 
-        if (existingEstimate) {
-          // Update existing estimate
-          const { data, error: updateError } = await supabase
-            .from('estimates')
-            .update({
-              json_data: estimateData,
-              total: grandTotal,
-              ai_summary: `Updated estimate with ${items.length} line items`
-            })
-            .eq('id', existingEstimate.id)
-            .select()
-            .single()
+      // Delete existing line items for this estimate, then insert new ones
+      // (Simpler than trying to match which ones to update/delete)
+      const { error: deleteError } = await supabase
+        .from('estimate_line_items')
+        .delete()
+        .eq('estimate_id', currentEstimateId)
 
-          if (updateError) {
-            throw new Error(`Failed to update estimate: ${updateError.message}`)
-          }
-
-          setSaveSuccess(true)
-          onSave?.(data.id, grandTotal)
-          return
-        }
+      if (deleteError) {
+        console.warn('Error deleting old line items:', deleteError)
+        // Continue anyway - upsert will handle duplicates
       }
 
-      // Create new estimate (only set project_id if it's valid)
-      const insertData: any = {
-        json_data: estimateData,
-        total: grandTotal,
-        ai_summary: `Created estimate with ${items.length} line items`
-      }
-
-      // Only add project_id if it's a valid UUID (not null, undefined, or "null")
-      if (projectId && projectId !== 'null' && projectId !== 'undefined') {
-        insertData.project_id = projectId
-      }
-
-      const { data, error: insertError } = await supabase
-        .from('estimates')
-        .insert(insertData)
+      const { error: upsertError } = await supabase
+        .from('estimate_line_items')
+        .insert(lineItemsToSave)
         .select()
-        .single()
 
-      if (insertError) {
-        throw new Error(`Failed to create estimate: ${insertError.message}`)
+      if (upsertError) {
+        throw new Error(`Failed to save line items: ${upsertError.message}`)
+      }
+
+      // Reload items with their IDs from database
+      const { data: savedItems } = await supabase
+        .from('estimate_line_items')
+        .select('*')
+        .eq('estimate_id', currentEstimateId)
+        .order('created_at', { ascending: true })
+
+      if (savedItems) {
+        setItems(savedItems.map(item => ({
+          id: item.id,
+          room_name: item.room_name || '',
+          description: item.description || '',
+          category: item.category || COST_CATEGORIES.find(c => c.code === item.cost_code)?.label || 'Other (999)',
+          cost_code: item.cost_code || '999',
+          labor_cost: item.labor_cost || 0,
+          margin_percent: item.margin_percent || 30,
+          client_price: item.client_price || 0
+        })))
       }
 
       setSaveSuccess(true)
-      onSave?.(data.id, grandTotal)
+      onSave?.(currentEstimateId, grandTotal)
 
     } catch (err) {
       console.error('Save estimate error:', err)
@@ -233,14 +376,6 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     } finally {
       setIsSaving(false)
     }
-  }
-
-  const formatDimensions = (dimensions: LineItem['dimensions']) => {
-    if (!dimensions) return ''
-    const { width, height, depth, unit } = dimensions
-    return depth 
-      ? `${width}×${height}×${depth} ${unit}`
-      : `${width}×${height} ${unit}`
   }
 
   const generateProposal = async () => {
@@ -252,7 +387,8 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       return
     }
 
-    if (!estimateId) {
+    const currentEstimateId = estimateId
+    if (!currentEstimateId) {
       setBlockedActionMessage('Please save the estimate first before generating a proposal.')
       setTimeout(() => setBlockedActionMessage(null), 5000)
       return
@@ -263,7 +399,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     setProposalUrl(null)
 
     try {
-      const response = await fetch(`/api/proposals/${estimateId}/pdf`, {
+      const response = await fetch(`/api/proposals/${currentEstimateId}/pdf`, {
         method: 'GET',
       })
 
@@ -281,6 +417,30 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       setIsGeneratingProposal(false)
     }
   }
+
+  // Group items by cost_code (trade) then by room_name for display
+  const groupedItems = items.reduce((acc, item, index) => {
+    const costCode = item.cost_code || '999'
+    const roomName = item.room_name || 'General'
+    
+    if (!acc[costCode]) {
+      acc[costCode] = {}
+    }
+    if (!acc[costCode][roomName]) {
+      acc[costCode][roomName] = []
+    }
+    
+    // Preserve original index for updateItem calls
+    acc[costCode][roomName].push({ ...item, _originalIndex: index })
+    return acc
+  }, {} as Record<string, Record<string, Array<LineItem & { _originalIndex: number }>>>)
+
+  // Get sorted cost codes for display
+  const sortedCostCodes = Object.keys(groupedItems).sort((a, b) => {
+    const aInfo = COST_CATEGORIES.find(c => c.code === a)
+    const bInfo = COST_CATEGORIES.find(c => c.code === b)
+    return (aInfo?.label || a).localeCompare(bInfo?.label || b)
+  })
 
   const hasItems = items.length > 0
 
@@ -313,7 +473,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
             <div>
               <CardTitle>Project Estimate</CardTitle>
               <CardDescription>
-                {items.length} line items • Total: ${grandTotal.toLocaleString()}
+                {items.length} line items • Total: ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </CardDescription>
             </div>
             <div className="flex gap-2">
@@ -401,104 +561,175 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Item</TableHead>
+                    <TableHead>Room</TableHead>
+                    <TableHead>Description</TableHead>
                     <TableHead>Category</TableHead>
-                    <TableHead>Qty</TableHead>
-                    <TableHead>Dimensions</TableHead>
-                    <TableHead>Unit Cost</TableHead>
-                    <TableHead>Total</TableHead>
+                    <TableHead>Labor Cost</TableHead>
+                    <TableHead>Margin %</TableHead>
+                    <TableHead>Client Price</TableHead>
                     <TableHead className="w-12"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {items.map((item, index) => (
-                    <TableRow key={index}>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <Input
-                            value={item.description}
-                            onChange={(e) => updateItem(index, 'description', e.target.value)}
-                            placeholder="Item description"
-                            className="min-w-[200px]"
-                          />
-                          {item.notes && (
-                            <Input
-                              value={item.notes}
-                              onChange={(e) => updateItem(index, 'notes', e.target.value)}
-                              placeholder="Notes"
-                              className="text-xs"
-                            />
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Select
-                          value={item.category}
-                          onValueChange={(value) => updateItem(index, 'category', value)}
-                        >
-                          <SelectTrigger className="w-[120px]">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Windows">Windows</SelectItem>
-                            <SelectItem value="Doors">Doors</SelectItem>
-                            <SelectItem value="Cabinets">Cabinets</SelectItem>
-                            <SelectItem value="Flooring">Flooring</SelectItem>
-                            <SelectItem value="Plumbing">Plumbing</SelectItem>
-                            <SelectItem value="Electrical">Electrical</SelectItem>
-                            <SelectItem value="Other">Other</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          type="number"
-                          value={item.quantity}
-                          onChange={(e) => updateItem(index, 'quantity', Number(e.target.value))}
-                          className="w-20"
-                          min="0"
-                          step="0.1"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
-                          {item.dimensions ? (
-                            <div className="text-sm">
-                              {formatDimensions(item.dimensions)}
-                            </div>
-                          ) : (
-                            <div className="text-xs text-muted-foreground">No dimensions</div>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          type="number"
-                          value={item.unit_cost || ''}
-                          onChange={(e) => updateItem(index, 'unit_cost', Number(e.target.value) || undefined)}
-                          placeholder="0.00"
-                          className="w-24"
-                          min="0"
-                          step="0.01"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <div className="font-medium">
-                          {item.total ? `$${item.total.toLocaleString()}` : '-'}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          onClick={() => removeItem(index)}
-                          variant="ghost"
-                          size="sm"
-                          className="text-red-600 hover:text-red-700"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {sortedCostCodes.map((costCode) => {
+                    const costInfo = COST_CATEGORIES.find(c => c.code === costCode)
+                    const tradeLabel = costInfo?.label || `Other (${costCode})`
+                    const rooms = Object.keys(groupedItems[costCode]).sort()
+                    
+                    return (
+                      <React.Fragment key={costCode}>
+                        {/* Trade Header Row */}
+                        <TableRow className="bg-muted/50">
+                          <TableCell colSpan={7} className="font-bold text-base py-3">
+                            {costCode} {tradeLabel.replace(`(${costCode})`, '').trim()}
+                          </TableCell>
+                        </TableRow>
+                        
+                        {rooms.map((roomName) => {
+                          const roomItems = groupedItems[costCode][roomName]
+                          
+                          return (
+                            <React.Fragment key={`${costCode}-${roomName}`}>
+                              {/* Room Subheader Row */}
+                              {roomName && roomName !== 'General' && (
+                                <TableRow className="bg-muted/30">
+                                  <TableCell colSpan={7} className="font-semibold text-sm py-2 pl-8">
+                                    {roomName}
+                                  </TableCell>
+                                </TableRow>
+                              )}
+                              
+                              {/* Items for this room */}
+                              {roomItems.map((item, roomItemIndex) => {
+                                const globalIndex = item._originalIndex
+                                const isCustomRoom = item.room_name && !ROOM_OPTIONS.includes(item.room_name)
+                                
+                                return (
+                                  <TableRow key={item.id || `${costCode}-${roomName}-${roomItemIndex}`}>
+                                    <TableCell>
+                                      <div className="flex flex-col gap-1 min-w-[150px]">
+                                        <Select
+                                          value={isCustomRoom ? '__custom__' : (item.room_name || '__custom__')}
+                                          onValueChange={(value) => {
+                                            if (value === '__custom__') {
+                                              updateItem(globalIndex, { room_name: '' })
+                                            } else {
+                                              updateItem(globalIndex, { room_name: value })
+                                            }
+                                          }}
+                                        >
+                                          <SelectTrigger className="w-full">
+                                            <SelectValue placeholder="Select room" />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="__custom__">Other / Custom</SelectItem>
+                                            {ROOM_OPTIONS.map(room => (
+                                              <SelectItem key={room} value={room}>{room}</SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                        {(!item.room_name || (item.room_name && !ROOM_OPTIONS.includes(item.room_name))) && (
+                                          <Input
+                                            className="w-full"
+                                            placeholder="Enter room name"
+                                            value={item.room_name || ''}
+                                            onChange={(e) => updateItem(globalIndex, { room_name: e.target.value })}
+                                          />
+                                        )}
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      <AutoExpandingTextarea
+                                        value={item.description}
+                                        onChange={(value) => updateItem(globalIndex, { description: value })}
+                                        placeholder="Item description"
+                                      />
+                                    </TableCell>
+                                    <TableCell>
+                                      <Select
+                                        value={item.cost_code}
+                                        onValueChange={(value) => {
+                                          const selected = COST_CATEGORIES.find(c => c.code === value)
+                                          updateItem(globalIndex, {
+                                            cost_code: selected?.code || '999',
+                                            category: selected?.label || 'Other (999)'
+                                          })
+                                        }}
+                                      >
+                                        <SelectTrigger className="w-[150px]">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {COST_CATEGORIES.map(({ label, code }) => (
+                                            <SelectItem key={code} value={code}>{label}</SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Input
+                                        type="number"
+                                        value={item.labor_cost || ''}
+                                        onChange={(e) => {
+                                          const labor = Number(e.target.value) || 0
+                                          updateItem(globalIndex, { labor_cost: labor })
+                                        }}
+                                        className="w-24"
+                                        min="0"
+                                        step="0.01"
+                                        placeholder="0.00"
+                                      />
+                                    </TableCell>
+                                    <TableCell>
+                                      <div className="flex items-center gap-2 min-w-[120px]">
+                                        <input
+                                          type="range"
+                                          min={0}
+                                          max={60}
+                                          value={item.margin_percent || 30}
+                                          onChange={(e) => {
+                                            const margin = Number(e.target.value)
+                                            updateItem(globalIndex, { margin_percent: margin })
+                                          }}
+                                          className="flex-1"
+                                        />
+                                        <Input
+                                          type="number"
+                                          value={item.margin_percent || 30}
+                                          min={0}
+                                          max={60}
+                                          className="w-16 border px-2 py-1 rounded"
+                                          onChange={(e) => {
+                                            const margin = Number(e.target.value) || 0
+                                            updateItem(globalIndex, { margin_percent: margin })
+                                          }}
+                                        />
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      <div className="font-medium min-w-[100px]">
+                                        ${(item.client_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Button
+                                        onClick={() => removeItem(globalIndex)}
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-red-600 hover:text-red-700"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                )
+                              })}
+                            </React.Fragment>
+                          )
+                        })}
+                      </React.Fragment>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -510,7 +741,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
               <div className="flex justify-end">
                 <div className="text-right">
                   <div className="text-2xl font-bold">
-                    Total: ${grandTotal.toLocaleString()}
+                    Total: ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </div>
                   <div className="text-sm text-muted-foreground">
                     {items.length} line items

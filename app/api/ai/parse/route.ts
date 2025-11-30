@@ -21,17 +21,17 @@ const SpecSectionSchema = z.object({
 })
 
 // Structured line item schema (for AI to parse)
-// NOTE: line_items will now ALWAYS be structured objects.
-// If the transcript is vague, use quantity=1, unit_cost=null, total=null (0-like)
-// and explain what's missing in `missing_info`.
+// NOTE: line_items will now ALWAYS be structured objects with atomic tasks.
+// Each described task becomes its own line item.
+// AI sets labor_cost, margin_percent, client_price to null (user fills these in UI).
 const StructuredLineItemSchema = z.object({
   description: z.string(),
-  category: z.enum(['Windows', 'Doors', 'Cabinets', 'Flooring', 'Plumbing', 'Electrical', 'Other']).optional(),
-  quantity: z.number().optional(),
-  unit_cost: z.number().nullable().optional(),
-  total: z.number().nullable().optional(),
+  category: z.enum(['Windows', 'Doors', 'Cabinets', 'Flooring', 'Plumbing', 'Electrical', 'HVAC', 'Demo', 'Framing', 'Paint', 'Countertops', 'Tile', 'Other']).optional(),
   cost_code: z.string().optional(),
   room: z.string().optional(),
+  labor_cost: z.number().nullable().optional(),
+  margin_percent: z.number().nullable().optional(),
+  client_price: z.number().nullable().optional(),
   notes: z.string().optional(),
 })
 
@@ -111,35 +111,37 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Process line items - all items are now structured objects
+    // Process line items - all items are now atomic structured objects
     const processedItems = parseResult.line_items.map((item) => {
       // All line items are structured objects (enforced by schema)
       if (typeof item === 'object' && item !== null) {
         return {
-          category: (item.category || 'Other') as 'Windows' | 'Doors' | 'Cabinets' | 'Flooring' | 'Plumbing' | 'Electrical' | 'Other',
+          category: item.category || 'Other',
           description: item.description || '',
-          quantity: item.quantity ?? 1,
-          dimensions: null,
-          unit_cost: item.unit_cost ?? undefined,
-          total: item.total ?? (item.quantity && item.unit_cost ? item.quantity * item.unit_cost : undefined),
+          cost_code: item.cost_code || '999',
+          room_name: item.room || 'General',
+          labor_cost: item.labor_cost ?? null,
+          margin_percent: item.margin_percent ?? null,
+          client_price: item.client_price ?? null,
           notes: item.notes || null
         }
       }
       // Fallback for unexpected types (should not happen with structured-only schema)
       return {
-        category: 'Other' as const,
+        category: 'Other',
         description: '',
-        quantity: 1,
-        dimensions: null,
-        unit_cost: undefined,
-        total: undefined,
+        cost_code: '999',
+        room_name: 'General',
+        labor_cost: null,
+        margin_percent: null,
+        client_price: null,
         notes: null
       }
     })
 
-    // Calculate total from all items
+    // Calculate total from all items (using client_price)
     const calculatedTotal = processedItems.reduce((sum, item) => {
-      return sum + (item.total || 0)
+      return sum + (item.client_price || 0)
     }, 0)
 
     // Prepare data for insert/update
@@ -151,7 +153,7 @@ export async function POST(req: NextRequest) {
         assumptions: parseResult.assumptions || [],
         missing_info: parseResult.missing_info || []
       },
-      ai_summary: `Parsed ${enrichedSections.length} specification sections and ${parseResult.line_items.length} line items from transcript`,
+      ai_summary: `Parsed ${enrichedSections.length} specification sections and ${parseResult.line_items.length} atomic line items from transcript`,
       total: calculatedTotal || 0
     }
 
@@ -205,6 +207,39 @@ export async function POST(req: NextRequest) {
       estimateId = newEstimate.id
     }
 
+    // Save line items to estimate_line_items table
+    if (processedItems.length > 0) {
+      // Delete existing line items for this estimate
+      await supabase
+        .from('estimate_line_items')
+        .delete()
+        .eq('estimate_id', estimateId)
+
+      // Insert new atomic line items
+      const lineItemsToInsert = processedItems.map(item => ({
+        estimate_id: estimateId,
+        project_id: projectId,
+        room_name: item.room_name,
+        description: item.description,
+        category: item.category,
+        cost_code: item.cost_code,
+        labor_cost: item.labor_cost,
+        margin_percent: item.margin_percent,
+        client_price: item.client_price
+      }))
+
+      const { error: lineItemsError } = await supabase
+        .from('estimate_line_items')
+        .insert(lineItemsToInsert)
+
+      if (lineItemsError) {
+        console.error('Error saving line items to database:', lineItemsError)
+        // Don't fail the request, but log the error
+      } else {
+        console.log(`Saved ${lineItemsToInsert.length} atomic line items to estimate_line_items table`)
+      }
+    }
+
     return NextResponse.json({
       success: true,
       data: {
@@ -212,10 +247,11 @@ export async function POST(req: NextRequest) {
         items: processedItems.map((item) => ({
           category: item.category,
           description: item.description,
-          quantity: item.quantity,
-          dimensions: item.dimensions,
-          unit_cost: item.unit_cost,
-          total: item.total,
+          cost_code: item.cost_code,
+          room_name: item.room_name,
+          labor_cost: item.labor_cost,
+          margin_percent: item.margin_percent,
+          client_price: item.client_price,
           notes: item.notes || ''
         }))
       },
@@ -247,56 +283,108 @@ function normalizeAllowances(sections: any[]): any[] {
 }
 
 // Enrich spec sections with items from line_items if they're empty
+// Groups atomic line items by cost_code (trade) and room
 function enrichSpecSections(sections: any[], lineItems: any[]): any[] {
-  return sections.map(section => {
-    // If section has no items, try to populate from line_items
-    if (section.items.length === 0 && lineItems.length > 0) {
-      // All line items are structured objects
-      const lineItemStrings = lineItems.map(item => {
-        if (typeof item === 'object' && item !== null) {
-          return (item.description || '').toLowerCase()
-        }
-        return ''
-      })
+  // If sections already have items, use them
+  // Otherwise, build sections from atomic line items grouped by cost_code and room
+  if (sections.length > 0 && sections.every(s => s.items && s.items.length > 0)) {
+    return sections
+  }
+
+  // Group line items by cost_code (trade), then by room
+  const itemsByCostCode = new Map<string, any[]>()
+  
+  lineItems.forEach(item => {
+    if (typeof item === 'object' && item !== null) {
+      const costCode = item.cost_code || '999'
+      const room = item.room || item.room_name || 'General'
       
-      // Find line items that might belong to this category
-      const categoryKeywords = section.title.toLowerCase()
-      const relevantItems = lineItems.filter((item, index) => {
-        const itemStr = lineItemStrings[index]
-        return itemStr.includes(categoryKeywords) || itemStr.includes(section.code)
-      })
-      
-      if (relevantItems.length > 0) {
-        section.items = relevantItems.map(item => {
-          const description = typeof item === 'object' && item !== null ? (item.description || '') : ''
-          return {
-            text: description,
-          label: null,
-          subitems: []
-          }
-        })
-      } else {
-        // If no matches, at least add the first few line items
-        section.items = lineItems.slice(0, 3).map(item => {
-          const description = typeof item === 'object' && item !== null ? (item.description || '') : ''
-          return {
-            text: description,
-          label: null,
-          subitems: []
-          }
-        })
+      if (!itemsByCostCode.has(costCode)) {
+        itemsByCostCode.set(costCode, [])
       }
+      
+      itemsByCostCode.get(costCode)!.push({
+        room,
+        description: item.description || ''
+      })
     }
+  })
+
+  // Build spec sections from grouped items
+  const enrichedSections = Array.from(itemsByCostCode.entries()).map(([costCode, items]) => {
+    // Group items by room
+    const itemsByRoom = new Map<string, string[]>()
     
-    // Ensure at least one item exists
-    if (section.items.length === 0) {
+    items.forEach(item => {
+      const room = item.room || 'General'
+      if (!itemsByRoom.has(room)) {
+        itemsByRoom.set(room, [])
+      }
+      if (item.description) {
+        itemsByRoom.get(room)!.push(item.description)
+      }
+    })
+
+    // Find existing section or create new one
+    const existingSection = sections.find(s => s.code === costCode)
+    
+    // Get trade title from existing section or map from cost code
+    const tradeTitleMap: Record<string, string> = {
+      '201': 'DEMO',
+      '305': 'FRAMING',
+      '402': 'HVAC',
+      '404': 'PLUMBING',
+      '405': 'ELECTRICAL',
+      '520': 'WINDOWS',
+      '530': 'DOORS',
+      '640': 'CABINETS',
+      '641': 'COUNTERTOPS',
+      '950': 'TILE',
+      '960': 'FLOORING',
+      '990': 'PAINT',
+      '999': 'OTHER'
+    }
+
+    const sectionItems = Array.from(itemsByRoom.entries()).map(([room, descriptions]) => ({
+      text: room,
+      label: room,
+      subitems: descriptions
+    }))
+
+    return {
+      code: costCode,
+      title: existingSection?.title || tradeTitleMap[costCode] || 'OTHER',
+      allowance: existingSection?.allowance || null,
+      items: sectionItems,
+      subcontractor: existingSection?.subcontractor || null,
+      notes: existingSection?.notes || null
+    }
+  })
+
+  // Merge with existing sections that might have different cost codes
+  const mergedSections = [...sections]
+  enrichedSections.forEach(newSection => {
+    const existingIndex = mergedSections.findIndex(s => s.code === newSection.code)
+    if (existingIndex >= 0) {
+      // Update existing section with grouped items if it's empty
+      if (!mergedSections[existingIndex].items || mergedSections[existingIndex].items.length === 0) {
+        mergedSections[existingIndex].items = newSection.items
+      }
+    } else {
+      // Add new section
+      mergedSections.push(newSection)
+    }
+  })
+
+  // Ensure all sections have at least one item
+  return mergedSections.map(section => {
+    if (!section.items || section.items.length === 0) {
       section.items = [{
         text: `Work items for ${section.title}`,
         label: null,
         subitems: []
       }]
     }
-    
     return section
   })
 }
@@ -406,31 +494,29 @@ function sanitizeLineItems(lineItems: any[] = []): Array<Record<string, any>> {
       return {
         description: typeof item === 'string' ? item : '',
         category: 'Other' as const,
-        quantity: 1,
-        unit_cost: null,
-        total: null,
         cost_code: '999',
         room: 'General',
+        labor_cost: null,
+        margin_percent: null,
+        client_price: null,
         notes: ''
       }
     }
 
     const trade = matchTradeFromText(item.category || item.cost_code || item.description || '')
-    const quantity = typeof item.quantity === 'number' && isFinite(item.quantity)
-      ? item.quantity
-      : parseNumericValue(item.quantity) || 1
-    const unitCost = parseNumericValue(item.unit_cost)
-    const total = parseNumericValue(item.total)
+    const laborCost = parseNumericValue(item.labor_cost)
+    const marginPercent = parseNumericValue(item.margin_percent)
+    const clientPrice = parseNumericValue(item.client_price)
 
     return {
       description: item.description ? String(item.description) : trade.title,
       category: trade.category,
-      quantity,
-      unit_cost: unitCost,
-      total: total ?? (unitCost != null ? unitCost * quantity : null),
       cost_code: item.cost_code || trade.code,
-      room: item.room ? String(item.room) : 'General',
-      notes: item.notes ? String(item.notes) : (item.allowance ? 'Allowance covers full scope' : ''),
+      room: item.room || item.room_name || 'General',
+      labor_cost: laborCost,
+      margin_percent: marginPercent,
+      client_price: clientPrice,
+      notes: item.notes ? String(item.notes) : '',
     }
   })
 }
@@ -468,69 +554,70 @@ async function parseTranscriptWithAI(
 ): Promise<ParseResult> {
   const prompt = `You are a senior construction estimator. Parse the contractor transcript into precise JSON that matches ParseResultSchema exactly. Do not change field names or structure.
 
-CORE BEHAVIOR (STRICT)
-1. Allowance Rule — MOST IMPORTANT:
-   When the transcript provides a single allowance for an entire trade (e.g., "demo allowance for the whole thing is $5000"), you MUST:
-     a. Create ONE grouped line item for that trade.
-     b. Set:
-          quantity = 1
-          unit_cost = allowanceAmount
-          total = allowanceAmount
-     c. Create a descriptive line item name that includes the rooms affected:
-          "Complete demolition scope — Kitchen, Family Room, Exterior"
-     d. Set the correct cost code for the trade.
-     e. Add a clear notes field:
-          "Allowance covers entire demo scope."
-     f. Also set spec_section.allowance = allowanceAmount.
-   Never divide the allowance across subtasks.
-   Never leave line_items with unit_cost or total equal to 0 when an allowance was provided.
+CORE BEHAVIOR (STRICT) — ATOMIC LINE ITEMS ONLY
+1. ATOMIC TASK RULE — MOST IMPORTANT:
+   EVERY described task MUST become its own separate line item. Never group multiple tasks into one line item.
+   
+   Example:
+   Transcript: "Demo full kitchen by removing upper cabinets, lower cabinets, soffit, bar, and opening wall for plumbing."
+   
+   You MUST create 5 separate line items:
+   - room: "Kitchen", description: "Remove upper cabinets", category: "Demo", cost_code: "201"
+   - room: "Kitchen", description: "Remove lower cabinets", category: "Demo", cost_code: "201"
+   - room: "Kitchen", description: "Remove soffit", category: "Demo", cost_code: "201"
+   - room: "Kitchen", description: "Remove bar area", category: "Demo", cost_code: "201"
+   - room: "Kitchen", description: "Open wall for plumbing", category: "Demo", cost_code: "201"
+   
+   NEVER create combined descriptions like:
+   ❌ "Remove upper cabinets, lower cabinets, soffit, bar, and open wall for plumbing"
+   ❌ "Complete kitchen demolition"
+   ❌ "Kitchen demo — full scope"
+   
+   ALWAYS split each action into its own atomic line item.
 
-2. Trade Grouping:
-   - Only create multiple line_items for the same trade if the transcript gives separate costs.
-   - Otherwise, always group into ONE line item per trade.
-
-3. Room Detection:
+2. Room Detection:
    - Detect rooms such as Kitchen, Family Room, Primary Bath, Bedroom 1, Bedroom 2, Exterior, etc.
-   - Rooms MUST appear in spec_sections as:
-        text: RoomName
-        subitems: bullet list of tasks for that room
-   - For line_items only include "room" if the transcript gives per-room pricing.  
-     Otherwise, set "room": "General".
+   - Set room field for each line item based on where the task occurs.
+   - If room is not mentioned, set "room": "General".
+   - Rooms MUST also appear in spec_sections grouped by trade.
 
-4. No Guessing:
-   - If no price is mentioned and no allowance exists:
-         quantity = 1
-         unit_cost = 0
-         total = 0
-         Add to missing_info: "Need cost for [trade/scope]."
-   - DO NOT invent dimensions, lengths, counts, materials, or costs.
+3. Cost Codes and Categories:
+   - Assign the correct cost_code based on the trade (see mapping below).
+   - Assign the correct category based on the trade.
+   - These must match: Demo → cost_code "201", Plumbing → "404", etc.
+
+4. Pricing Fields (AI sets to null):
+   - labor_cost: null (user will fill in UI)
+   - margin_percent: null (user will fill in UI)
+   - client_price: null (computed in UI as labor_cost * (1 + margin_percent/100))
+   - DO NOT attempt to assign costs unless explicitly stated in transcript.
 
 5. Line Item Format (required for each object):
-   description
-   category
-   quantity
-   unit_cost
-   total
-   cost_code
-   room
-   notes
+   description: atomic action only (e.g., "Remove upper cabinets", not "Remove upper and lower cabinets")
+   category: one of: Windows, Doors, Cabinets, Flooring, Plumbing, Electrical, HVAC, Demo, Framing, Paint, Countertops, Tile, Other
+   cost_code: string matching category (see mapping)
+   room: detected room name or "General"
+   labor_cost: null
+   margin_percent: null
+   client_price: null
+   notes: optional clarification
 
 CATEGORY + COST CODE MAPPING:
-- Demo / demolition → category "Other", cost_code "201"
-- Framing / rough carpentry → category "Other", cost_code "305"
+- Demo / demolition → category "Demo", cost_code "201"
+- Framing / rough carpentry → category "Framing", cost_code "305"
 - Plumbing → category "Plumbing", cost_code "404"
 - Electrical → category "Electrical", cost_code "405"
-- HVAC / mechanical → category "Other", cost_code "402"
+- HVAC / mechanical → category "HVAC", cost_code "402"
 - Windows → category "Windows", cost_code "520"
 - Doors → category "Doors", cost_code "530"
 - Cabinets / built-ins → category "Cabinets", cost_code "640"
-- Countertops → category "Cabinets", cost_code "641"
-- Tile / stone → category "Flooring", cost_code "950"
+- Countertops → category "Countertops", cost_code "641"
+- Tile / stone → category "Tile", cost_code "950"
 - Flooring → category "Flooring", cost_code "960"
-- Paint / coatings → category "Other", cost_code "990"
+- Paint / coatings → category "Paint", cost_code "990"
 - Default fallback → category "Other", cost_code "999"
 
-Note: Category must be one of: "Windows", "Doors", "Cabinets", "Flooring", "Plumbing", "Electrical", or "Other".
+Note: Category must be one of: "Windows", "Doors", "Cabinets", "Flooring", "Plumbing", "Electrical", "HVAC", "Demo", "Framing", "Paint", "Countertops", "Tile", "Other".
 
 SPEC SECTIONS:
 SPEC SECTION CONSOLIDATION RULE (CRITICAL):
@@ -539,48 +626,44 @@ For each trade (e.g. DEMO 201), you MUST generate exactly ONE spec_section objec
 Do NOT output multiple spec_sections with the same code/title.
 Do NOT split DEMO into multiple sections per room.
 
-Instead:
-- Create a single spec_section for the trade.
-- Each room becomes one item inside that section:
-    { "text": "Kitchen", "subitems": [...] }
-    { "text": "Family Room", "subitems": [...] }
-    { "text": "Exterior", "subitems": [...] }
+Structure:
+- Create ONE spec_section per unique cost_code/trade.
+- Group all line_items by cost_code, then by room.
+- Each room becomes one item inside the spec_section:
+    { "text": "Kitchen", "label": "Kitchen", "subitems": [...] }
+    { "text": "Family Room", "label": "Family Room", "subitems": [...] }
+    { "text": "Exterior", "label": "Exterior", "subitems": [...] }
 
-Do NOT repeat the trade name ("DEMO") at the item level.
-Do NOT add duplicate section headers.
-Do NOT wrap items inside additional section layers.
+- For each room, extract subitems from line_items that match that cost_code and room.
+- Each subitem should be the description from a matching line_item.
 
-Example of correct structure:
+Example:
+If you have line_items:
+  - room: "Kitchen", description: "Remove upper cabinets", cost_code: "201"
+  - room: "Kitchen", description: "Remove lower cabinets", cost_code: "201"
+  - room: "Kitchen", description: "Remove soffit", cost_code: "201"
 
-"spec_sections": [
+Then spec_section for DEMO 201 should have:
   {
     "code": "201",
     "title": "DEMO",
-    "allowance": 5000,
+    "allowance": null,
     "items": [
-      { "text": "Kitchen", "subitems": [ "Remove upper cabinets", "Remove lower cabinets", "Remove soffit", "Remove bar area", "Open wall for plumbing" ] },
-      { "text": "Family Room", "subitems": [ "Remove fireplace", "Remove sheetrock", "Remove two small windows" ] },
-      { "text": "Exterior", "subitems": [ "Cut stucco around openings" ] }
+      { 
+        "text": "Kitchen", 
+        "label": "Kitchen",
+        "subitems": [
+          "Remove upper cabinets",
+          "Remove lower cabinets", 
+          "Remove soffit"
+        ]
+      }
     ]
   }
-]
 
-Never output:
-DEMO 201
-DEMO 201
-DEMO 201
-before each room.
-
-Always consolidate into ONE trade section with multiple room items.
-
-- Create ONE spec_section per trade.
-- Use the correct title + code (e.g., DEMO 201).
-- Inside each section:
-     items = array of { text, label, subitems }
-- Each room should be:
-     text: "Kitchen"
-     subitems: ["Remove upper cabinets", "Remove lower cabinets", …]
-- Only assign allowance at the section level when explicitly mentioned.
+Do NOT repeat the trade name ("DEMO") at the item level.
+Do NOT add duplicate section headers.
+- Only assign allowance at the section level if explicitly mentioned in transcript.
 
 OUTPUT FORMAT:
 Return strictly:
@@ -592,129 +675,199 @@ Return strictly:
   "missing_info": [...]
 }
 
+Example line_items output:
+"line_items": [
+  {
+    "description": "Remove upper cabinets",
+    "category": "Demo",
+    "cost_code": "201",
+    "room": "Kitchen",
+    "labor_cost": null,
+    "margin_percent": null,
+    "client_price": null
+  },
+  {
+    "description": "Remove lower cabinets",
+    "category": "Demo",
+    "cost_code": "201",
+    "room": "Kitchen",
+    "labor_cost": null,
+    "margin_percent": null,
+    "client_price": null
+  }
+]
+
 All numbers must be numeric (no commas, no "$").
 Return JSON only, no markdown.
 
 TRANSCRIPT:
 ${transcript}`
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: [
-            'You are Estimatix\'s parsing engine, a senior construction estimator AI.',
-            'Your job is to convert contractor speech into STRICTLY structured JSON that matches ParseResultSchema exactly.',
-            '',
-            'Hard rules:',
-            '- Always return valid JSON with no comments, no trailing commas, no markdown.',
-            '- Never return plain strings in line_items. Every line item MUST be a structured object.',
-            '- Never invent IDs. Use the projectId exactly as provided in the user prompt.',
-            '- All numeric fields must be bare numbers (no "$", no commas).',
-            '- If information is vague or missing, use sensible defaults (quantity=1, unit_cost=null, total=null) and record what is missing in missing_info.',
-            '',
-            'Proposal vs Estimate responsibilities:',
-            '- spec_sections: for human-readable spec sheet (proposal PDF). One section per trade (per cost code). Use bullets and sub-bullets, grouped by room.',
-            '- line_items: for internal estimating ONLY (no need to match the PDF exactly). One main priced line item per trade when the cost or allowance is lump-sum.',
-            '',
-            'You must obey the user prompt exactly. If any conflict exists, prefer the user prompt.'
-          ].join('\n')
+  // Retry logic for transient errors (502, 503, 504)
+  const maxRetries = 3
+  let lastError: Error | null = null
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      if (attempt > 0) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delayMs = Math.pow(2, attempt - 1) * 1000
+        console.log(`Retrying OpenAI API call (attempt ${attempt + 1}/${maxRetries}) after ${delayMs}ms...`)
+        await new Promise(resolve => setTimeout(resolve, delayMs))
+      }
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
         },
-        {
-          role: 'user',
-          content: prompt
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: [
+                'You are Estimatix\'s parsing engine, a senior construction estimator AI.',
+                'Your job is to convert contractor speech into STRICTLY structured JSON that matches ParseResultSchema exactly.',
+                '',
+                'Hard rules:',
+                '- Always return valid JSON with no comments, no trailing commas, no markdown.',
+                '- Never return plain strings in line_items. Every line item MUST be a structured object.',
+                '- Never invent IDs. Use the projectId exactly as provided in the user prompt.',
+                '- All numeric fields must be bare numbers (no "$", no commas).',
+                '- If information is vague or missing, set labor_cost=null, margin_percent=null, client_price=null and record what is missing in missing_info.',
+                '',
+                'Proposal vs Estimate responsibilities:',
+                '- spec_sections: for human-readable spec sheet (proposal PDF). One section per trade (per cost code). Group by room with subitems as atomic task descriptions.',
+                '- line_items: atomic tasks ONLY. Every described task becomes its own line item. Never group multiple tasks into one line item.',
+                '',
+                'You must obey the user prompt exactly. If any conflict exists, prefer the user prompt.'
+              ].join('\n')
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.1, // Low temperature for consistent, structured output
+          max_tokens: 4000,
+          response_format: { type: 'json_object' }
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        const status = response.status
+        const isRetryable = status === 502 || status === 503 || status === 504 || status === 429
+        
+        // If it's a retryable error and we have retries left, continue to retry
+        if (isRetryable && attempt < maxRetries - 1) {
+          lastError = new Error(`OpenAI API error: ${status} ${errorData.error?.message || response.statusText}`)
+          console.warn(`OpenAI API returned ${status}, will retry...`, errorData)
+          continue
         }
-      ],
-      temperature: 0.1, // Low temperature for consistent, structured output
-      max_tokens: 4000,
-      response_format: { type: 'json_object' }
-    })
-  })
+        
+        // Non-retryable error or out of retries
+        console.error('OpenAI API error:', { status, errorData, attempt: attempt + 1 })
+        throw new Error(`OpenAI API error: ${status} ${errorData.error?.message || response.statusText}${attempt > 0 ? ` (after ${attempt + 1} attempts)` : ''}`)
+      }
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    console.error('OpenAI API error:', { status: response.status, errorData })
-    throw new Error(`OpenAI API error: ${response.status} ${errorData.error?.message || response.statusText}`)
-  }
+      // Success - break out of retry loop
+      const result = await response.json()
+      const content = result.choices[0]?.message?.content
 
-  const result = await response.json()
-  const content = result.choices[0]?.message?.content
+      if (!content) {
+        throw new Error('No content returned from OpenAI')
+      }
 
-  if (!content) {
-    throw new Error('No content returned from OpenAI')
-  }
+      // Log raw AI output
+      console.log('AI RAW OUTPUT:', content)
 
-  // Log raw AI output
-  console.log('AI RAW OUTPUT:', content)
+      try {
+        const parsed = JSON.parse(content)
+        const sanitized = sanitizeParseResult(parsed, projectId)
+        
+        // Log sanitized JSON
+        console.log('AI PARSED JSON:', JSON.stringify(sanitized, null, 2))
+        
+        // Validate with Zod schema
+        const validated = ParseResultSchema.parse(sanitized)
+        
+        // Ensure line_items are properly formatted (all items are structured objects)
+        const normalizedLineItems = validated.line_items.map(item => {
+          // All line items are structured objects (enforced by schema)
+          const categoryOptions: Array<'Windows' | 'Doors' | 'Cabinets' | 'Flooring' | 'Plumbing' | 'Electrical' | 'HVAC' | 'Demo' | 'Framing' | 'Paint' | 'Countertops' | 'Tile' | 'Other'> = 
+            ['Windows', 'Doors', 'Cabinets', 'Flooring', 'Plumbing', 'Electrical', 'HVAC', 'Demo', 'Framing', 'Paint', 'Countertops', 'Tile', 'Other']
+          const validCategory = item.category && categoryOptions.includes(item.category as any) 
+            ? item.category 
+            : 'Other' as const
 
-  try {
-    const parsed = JSON.parse(content)
-    const sanitized = sanitizeParseResult(parsed, projectId)
-    
-    // Log sanitized JSON
-    console.log('AI PARSED JSON:', JSON.stringify(sanitized, null, 2))
-    
-    // Validate with Zod schema
-    const validated = ParseResultSchema.parse(sanitized)
-    
-    // Ensure line_items are properly formatted (all items are structured objects)
-    const normalizedLineItems = validated.line_items.map(item => {
-      // All line items are structured objects (enforced by schema)
-      const categoryOptions: Array<'Windows' | 'Doors' | 'Cabinets' | 'Flooring' | 'Plumbing' | 'Electrical' | 'Other'> = 
-        ['Windows', 'Doors', 'Cabinets', 'Flooring', 'Plumbing', 'Electrical', 'Other']
-      const validCategory = item.category && categoryOptions.includes(item.category as any) 
-        ? item.category 
-        : 'Other' as const
-
-      if (item && typeof item === 'object') {
+          if (item && typeof item === 'object') {
+            return {
+              description: item.description || '',
+              category: validCategory,
+              cost_code: item.cost_code || '999',
+              room: item.room || 'General',
+              labor_cost: item.labor_cost ?? null,
+              margin_percent: item.margin_percent ?? null,
+              client_price: item.client_price ?? null,
+              notes: item.notes || ''
+            }
+          }
+          // Fallback for unexpected types (should not happen with structured-only schema)
+          return {
+            description: '',
+            category: 'Other' as const,
+            cost_code: '999',
+            room: 'General',
+            labor_cost: null,
+            margin_percent: null,
+            client_price: null,
+            notes: ''
+          }
+        })
+        
         return {
-          description: item.description || '',
-          category: validCategory,
-          quantity: item.quantity ?? 1,
-          unit_cost: item.unit_cost ?? null,
-          total: item.total ?? (item.quantity && item.unit_cost ? item.quantity * item.unit_cost : null),
-          cost_code: item.cost_code || '',
-          room: item.room || 'General',
-          notes: item.notes || ''
+          ...validated,
+          line_items: normalizedLineItems
+        }
+      } catch (parseError) {
+        console.error('JSON parse/validation error:', parseError)
+        console.error('Raw content:', content)
+        
+        // Fallback: return safe empty structure instead of throwing
+        console.warn('Falling back to safe empty structure due to parse error')
+        return {
+          projectId: projectId,
+          spec_sections: [],
+          line_items: [],
+          assumptions: [],
+          missing_info: ['Failed to parse AI response. Please try again or add items manually.']
         }
       }
-      // Fallback for unexpected types (should not happen with structured-only schema)
-      return {
-        description: '',
-        category: 'Other' as const,
-        quantity: 1,
-        unit_cost: null,
-        total: null,
-        cost_code: '999',
-        room: 'General',
-        notes: ''
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      
+      // If this is the last attempt, throw the error
+      if (attempt === maxRetries - 1) {
+        // Check if it's a network error that might benefit from retry suggestion
+        const isNetworkError = lastError.message.includes('fetch failed') || 
+                              lastError.message.includes('ECONNREFUSED') ||
+                              lastError.message.includes('ENOTFOUND')
+        
+        if (isNetworkError) {
+          throw new Error(`Network error connecting to OpenAI API. Please check your internet connection and try again.${attempt > 0 ? ` (tried ${attempt + 1} times)` : ''}`)
+        }
+        
+        throw lastError
       }
-    })
-    
-    return {
-      ...validated,
-      line_items: normalizedLineItems
-    }
-  } catch (parseError) {
-    console.error('JSON parse/validation error:', parseError)
-    console.error('Raw content:', content)
-    
-    // Fallback: return safe empty structure instead of throwing
-    // This prevents breaking the UI if AI returns bad JSON
-    console.warn('Falling back to safe empty structure due to parse error')
-    return {
-      projectId: projectId,
-      spec_sections: [],
-      line_items: [],
-      assumptions: [],
-      missing_info: ['Failed to parse AI response. Please try again or add items manually.']
+      
+      // Otherwise, log and continue to retry
+      console.warn(`OpenAI API call failed (attempt ${attempt + 1}/${maxRetries}):`, lastError.message)
     }
   }
+  
+  // Should not reach here, but handle it just in case
+  throw lastError || new Error('Failed to call OpenAI API after retries')
 }
