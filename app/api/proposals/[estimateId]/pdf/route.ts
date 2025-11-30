@@ -5,6 +5,7 @@ import { loadTemplate } from "@/lib/loadTemplate";
 import { renderTemplate } from "@/lib/renderTemplate";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { isAllowanceCostCode, getCostCodeForItem } from "@/lib/allowanceRules";
+import { getProfileByUserId } from "@/lib/profile";
 
 export const runtime = "nodejs";
 
@@ -239,20 +240,45 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
     // Normalize each item for Handlebars
     const normalizedItems = section.items.map((item: any, index: number) => {
       const normalized: any = {};
+      
+      // Get section title to filter out from item text/labels (to avoid repeating "DEMO", etc.)
+      const sectionTitle = (section.title || '').trim().toUpperCase();
 
       // Handle text - include if it has a value (can be null for label-only items)
       if (item.text !== null && item.text !== undefined) {
-        const textStr = String(item.text).trim();
-        if (textStr) {
-          normalized.text = textStr;
+        let textStr = String(item.text).trim();
+        // Skip if text exactly matches section title (already shown in header)
+        if (sectionTitle && textStr.toUpperCase() === sectionTitle) {
+          // Don't set normalized.text if it's just the section title
+        } else {
+          // Remove section title from text if it appears as prefix/suffix (e.g., "DEMO Kitchen" -> "Kitchen")
+          if (sectionTitle && textStr.toUpperCase().includes(sectionTitle)) {
+            textStr = textStr.replace(new RegExp(`^${sectionTitle}\\s+`, 'i'), '').trim();
+            textStr = textStr.replace(new RegExp(`\\s+${sectionTitle}$`, 'i'), '').trim();
+            textStr = textStr.replace(new RegExp(`\\s+${sectionTitle}\\s+`, 'i'), ' ').trim();
+          }
+          if (textStr) {
+            normalized.text = textStr;
+          }
         }
       }
 
       // Handle label - include if it has a value
       if (item.label !== null && item.label !== undefined) {
-        const labelStr = String(item.label).trim();
-        if (labelStr) {
-          normalized.label = labelStr;
+        let labelStr = String(item.label).trim();
+        // Skip if label exactly matches section title (already shown in header)
+        if (sectionTitle && labelStr.toUpperCase() === sectionTitle) {
+          // Don't set normalized.label if it's just the section title
+        } else {
+          // Remove section title from label if it appears as prefix/suffix
+          if (sectionTitle && labelStr.toUpperCase().includes(sectionTitle)) {
+            labelStr = labelStr.replace(new RegExp(`^${sectionTitle}\\s+`, 'i'), '').trim();
+            labelStr = labelStr.replace(new RegExp(`\\s+${sectionTitle}$`, 'i'), '').trim();
+            labelStr = labelStr.replace(new RegExp(`\\s+${sectionTitle}\\s+`, 'i'), ' ').trim();
+          }
+          if (labelStr) {
+            normalized.label = labelStr;
+          }
         }
       }
 
@@ -294,9 +320,22 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
       
       if (!hasContent) {
         console.log(`[PDF] Filtering out empty item ${index} in section ${section.code}`);
+        return false;
       }
       
-      return hasContent;
+      // Filter out items where text/label exactly matches section title (already in header)
+      const sectionTitle = (section.title || '').trim().toUpperCase();
+      if (sectionTitle) {
+        const textMatches = item.text && item.text.trim().toUpperCase() === sectionTitle;
+        const labelMatches = item.label && item.label.trim().toUpperCase() === sectionTitle;
+        // If only content is the section title and no subitems, skip it
+        if ((textMatches || labelMatches) && (!item.subitems || item.subitems.length === 0)) {
+          console.log(`[PDF] Filtering out item ${index} in section ${section.code} - matches section title "${sectionTitle}"`);
+          return false;
+        }
+      }
+      
+      return true;
     });
 
     // Ensure at least one item exists - but log a warning
@@ -363,7 +402,8 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
           title,
           owner_name,
           project_address,
-          client_name
+          client_name,
+          user_id
         )
       `)
       .eq("id", estimateId)
@@ -379,6 +419,16 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
 
     // Extract project data (Supabase returns it as an array for foreign key relationships)
     const project = Array.isArray(estimate.projects) ? estimate.projects[0] : estimate.projects;
+
+    // Fetch estimator profile
+    let estimatorProfile = null
+    if (project?.user_id) {
+      try {
+        estimatorProfile = await getProfileByUserId(project.user_id)
+      } catch (err) {
+        console.warn('Could not load estimator profile:', err)
+      }
+    }
 
     const jsonData = estimate.json_data as any;
     const allItems = jsonData?.items || [];
@@ -500,6 +550,8 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       proposal_date: new Date().toLocaleDateString(),
       year: new Date().getFullYear(),
       sections: sections,
+      estimator_name: estimatorProfile?.full_name || null,
+      estimator_company: estimatorProfile?.company_name || null,
     });
     
     console.log('[PDF] Rendered HTML length:', html.length);

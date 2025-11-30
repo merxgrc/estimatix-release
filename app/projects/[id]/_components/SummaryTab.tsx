@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { EditableProjectTitle } from "@/components/editable-project-title"
 import { EditableField } from "@/components/editable-field"
+import { db } from "@/lib/db-client"
 import type { Project, Estimate } from "@/types/db"
 import { 
   MapPin, 
@@ -32,17 +33,7 @@ interface SummaryTabProps {
   documents: { url: string; name: string; id: string }[]
   missingInfo?: string[]
   todos?: string[]
-  onUpdateTitle: (newTitle: string) => Promise<void>
-  onUpdateOwner: (ownerName: string) => Promise<void>
-  onUpdateAddress: (address: string) => Promise<void>
-  onUpdateProjectType?: (value: string) => Promise<void>
-  onUpdateYearBuilt?: (value: string) => Promise<void>
-  onUpdateHomeSize?: (value: string) => Promise<void>
-  onUpdateLotSize?: (value: string) => Promise<void>
-  onUpdateBedrooms?: (value: string) => Promise<void>
-  onUpdateBathrooms?: (value: string) => Promise<void>
-  onUpdateJobStart?: (value: string) => Promise<void>
-  onUpdateJobDeadline?: (value: string) => Promise<void>
+  onRefresh?: () => void
   onUploadPhoto: (file: File) => Promise<void>
   onUploadDocument: (file: File) => Promise<void>
   onDeletePhoto: (id: string) => Promise<void>
@@ -60,17 +51,7 @@ export function SummaryTab({
   documents,
   missingInfo,
   todos,
-  onUpdateTitle,
-  onUpdateOwner,
-  onUpdateAddress,
-  onUpdateProjectType,
-  onUpdateYearBuilt,
-  onUpdateHomeSize,
-  onUpdateLotSize,
-  onUpdateBedrooms,
-  onUpdateBathrooms,
-  onUpdateJobStart,
-  onUpdateJobDeadline,
+  onRefresh,
   onUploadPhoto,
   onUploadDocument,
   onDeletePhoto,
@@ -86,6 +67,120 @@ export function SummaryTab({
   const [uploadingDocument, setUploadingDocument] = useState(false)
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null)
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null)
+
+  // Helper to update project metadata using client-side db.updateProject (same as top of page)
+  const handleUpdateMetadata = async (field: string, value: string | number | null) => {
+    try {
+      const patch: any = {}
+      
+      // Convert string numbers to actual numbers for numeric fields
+      if (['year_built', 'home_size_sqft', 'lot_size_sqft', 'bedrooms', 'bathrooms', 'missing_data_count'].includes(field)) {
+        patch[field] = value === '' || value === null ? null : Number(value)
+      } else {
+        patch[field] = value === '' ? null : value
+      }
+
+      // Only add last_summary_update for new metadata fields (not original fields like title, owner_name, project_address)
+      // This field is added in migration 004, so it might not exist for older projects
+      const originalFields = ['title', 'owner_name', 'project_address', 'client_name']
+      if (!originalFields.includes(field)) {
+        // Only add timestamp for new metadata fields
+        // If the column doesn't exist, Supabase will ignore it or return an error we can handle
+        patch.last_summary_update = new Date().toISOString()
+      }
+
+      // Use the same db.updateProject method that works at the top of the page
+      const updatedProject = await db.updateProject(project.id, patch)
+      
+      // Update local project state immediately for instant UI feedback
+      // The refresh will ensure we have the latest data from the server
+      if (onRefresh) {
+        onRefresh()
+      } else {
+        router.refresh()
+      }
+    } catch (error) {
+      // Log full error details for debugging
+      console.error(`Error updating ${field}:`, error)
+      console.error('Error type:', typeof error)
+      console.error('Error constructor:', error?.constructor?.name)
+      console.error('Error keys:', error && typeof error === 'object' ? Object.keys(error) : 'N/A')
+      console.error('Error JSON:', JSON.stringify(error, null, 2))
+      
+      // Extract error message from various error formats (Supabase PostgrestError, Error, etc.)
+      let errorMessage = `Failed to update ${field}. Please try again.`
+      
+      if (error instanceof Error) {
+        errorMessage = error.message || errorMessage
+      } else if (error && typeof error === 'object') {
+        // Handle Supabase PostgrestError objects - check all possible properties
+        const errorObj = error as any
+        
+        if (errorObj?.message && typeof errorObj.message === 'string' && errorObj.message.trim()) {
+          errorMessage = errorObj.message
+        } else if (errorObj?.code && typeof errorObj.code === 'string') {
+          // Use code if message is not available
+          errorMessage = `Database error (${errorObj.code}). Please try again.`
+        } else if (errorObj?.details && typeof errorObj.details === 'string' && errorObj.details.trim()) {
+          errorMessage = errorObj.details
+        } else if (errorObj?.hint && typeof errorObj.hint === 'string' && errorObj.hint.trim()) {
+          errorMessage = errorObj.hint
+        } else if (errorObj?.error && typeof errorObj.error === 'string') {
+          errorMessage = errorObj.error
+        } else {
+          // If we can't extract a message, provide a more specific error
+          errorMessage = `Failed to update ${field}. The database update may have failed. Please check your connection and try again.`
+        }
+      }
+      
+      throw new Error(errorMessage)
+    }
+  }
+
+  // Handlers for each field
+  const handleUpdateTitle = async (value: string) => {
+    await handleUpdateMetadata('title', value)
+  }
+
+  const handleUpdateOwner = async (value: string) => {
+    await handleUpdateMetadata('owner_name', value)
+  }
+
+  const handleUpdateAddress = async (value: string) => {
+    await handleUpdateMetadata('project_address', value)
+  }
+
+  const handleUpdateProjectType = async (value: string) => {
+    await handleUpdateMetadata('project_type', value)
+  }
+
+  const handleUpdateYearBuilt = async (value: string) => {
+    await handleUpdateMetadata('year_built', value)
+  }
+
+  const handleUpdateHomeSize = async (value: string) => {
+    await handleUpdateMetadata('home_size_sqft', value)
+  }
+
+  const handleUpdateLotSize = async (value: string) => {
+    await handleUpdateMetadata('lot_size_sqft', value)
+  }
+
+  const handleUpdateBedrooms = async (value: string) => {
+    await handleUpdateMetadata('bedrooms', value)
+  }
+
+  const handleUpdateBathrooms = async (value: string) => {
+    await handleUpdateMetadata('bathrooms', value)
+  }
+
+  const handleUpdateJobStart = async (value: string) => {
+    await handleUpdateMetadata('job_start_target', value)
+  }
+
+  const handleUpdateJobDeadline = async (value: string) => {
+    await handleUpdateMetadata('job_deadline', value)
+  }
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -201,24 +296,14 @@ export function SummaryTab({
   // Calculate missing data count
   const missingDataCount = extractedMissingInfo.length
 
-  // Parse metadata from notes (stored as JSON) or return defaults
-  const parseMetadata = () => {
+  // Format date values for display
+  const formatDate = (dateString: string | null): string | null => {
+    if (!dateString) return null
     try {
-      if (project.notes) {
-        const parsed = JSON.parse(project.notes)
-        if (typeof parsed === 'object' && parsed !== null && 'metadata' in parsed) {
-          return parsed.metadata
-        }
-      }
-    } catch (e) {
-      // If notes is not JSON, return empty metadata
+      return new Date(dateString).toISOString().split('T')[0] // YYYY-MM-DD format
+    } catch {
+      return dateString
     }
-    return {}
-  }
-
-  const metadata = parseMetadata()
-  const getMetadataValue = (key: string): string | null => {
-    return metadata[key] || null
   }
 
   return (
@@ -230,7 +315,7 @@ export function SummaryTab({
           <CardHeader className="pb-3 flex-shrink-0">
             <EditableProjectTitle
               title={project.title}
-              onSave={onUpdateTitle}
+              onSave={handleUpdateTitle}
               variant="card"
               className="mb-0"
             />
@@ -244,20 +329,20 @@ export function SummaryTab({
                   <EditableField
                     label="Project Name"
                     value={project.title}
-                    onSave={onUpdateTitle}
+                    onSave={handleUpdateTitle}
                     placeholder="Enter project name"
                   />
                   <EditableField
                     label="Owner Name"
                     value={project.owner_name}
-                    onSave={onUpdateOwner}
+                    onSave={handleUpdateOwner}
                     placeholder="Enter owner name"
                   />
                   <div>
                     <EditableField
                       label="Property Address"
                       value={project.project_address}
-                      onSave={onUpdateAddress}
+                      onSave={handleUpdateAddress}
                       placeholder="Enter property address"
                       multiline
                     />
@@ -273,14 +358,12 @@ export function SummaryTab({
                       </a>
                     )}
                   </div>
-                  {onUpdateProjectType && (
-                    <EditableField
-                      label="Project Type"
-                      value={getMetadataValue('project_type')}
-                      onSave={onUpdateProjectType}
-                      placeholder="Enter project type"
-                    />
-                  )}
+                  <EditableField
+                    label="Project Type"
+                    value={project.project_type}
+                    onSave={handleUpdateProjectType}
+                    placeholder="Enter project type"
+                  />
                 </div>
               </div>
 
@@ -288,46 +371,36 @@ export function SummaryTab({
               <div className="space-y-3">
                 <h3 className="text-sm font-semibold text-foreground">Property Details</h3>
                 <div className="space-y-2 text-sm">
-                  {onUpdateYearBuilt && (
-                    <EditableField
-                      label="Year Built"
-                      value={getMetadataValue('year_built')}
-                      onSave={onUpdateYearBuilt}
-                      placeholder="Enter year built"
-                    />
-                  )}
-                  {onUpdateHomeSize && (
-                    <EditableField
-                      label="Home Size (sq ft)"
-                      value={getMetadataValue('home_size')}
-                      onSave={onUpdateHomeSize}
-                      placeholder="Enter home size"
-                    />
-                  )}
-                  {onUpdateLotSize && (
-                    <EditableField
-                      label="Lot Size (sq ft)"
-                      value={getMetadataValue('lot_size')}
-                      onSave={onUpdateLotSize}
-                      placeholder="Enter lot size"
-                    />
-                  )}
-                  {onUpdateBedrooms && (
-                    <EditableField
-                      label="Bedrooms"
-                      value={getMetadataValue('bedrooms')}
-                      onSave={onUpdateBedrooms}
-                      placeholder="Enter number of bedrooms"
-                    />
-                  )}
-                  {onUpdateBathrooms && (
-                    <EditableField
-                      label="Bathrooms"
-                      value={getMetadataValue('bathrooms')}
-                      onSave={onUpdateBathrooms}
-                      placeholder="Enter number of bathrooms"
-                    />
-                  )}
+                  <EditableField
+                    label="Year Built"
+                    value={project.year_built?.toString() || null}
+                    onSave={handleUpdateYearBuilt}
+                    placeholder="Enter year built"
+                  />
+                  <EditableField
+                    label="Home Size (sq ft)"
+                    value={project.home_size_sqft?.toString() || null}
+                    onSave={handleUpdateHomeSize}
+                    placeholder="Enter home size"
+                  />
+                  <EditableField
+                    label="Lot Size (sq ft)"
+                    value={project.lot_size_sqft?.toString() || null}
+                    onSave={handleUpdateLotSize}
+                    placeholder="Enter lot size"
+                  />
+                  <EditableField
+                    label="Bedrooms"
+                    value={project.bedrooms?.toString() || null}
+                    onSave={handleUpdateBedrooms}
+                    placeholder="Enter number of bedrooms"
+                  />
+                  <EditableField
+                    label="Bathrooms"
+                    value={project.bathrooms?.toString() || null}
+                    onSave={handleUpdateBathrooms}
+                    placeholder="Enter number of bathrooms"
+                  />
                 </div>
               </div>
 
@@ -335,22 +408,18 @@ export function SummaryTab({
               <div className="space-y-3">
                 <h3 className="text-sm font-semibold text-foreground">Job Details</h3>
                 <div className="space-y-2 text-sm">
-                  {onUpdateJobStart && (
-                    <EditableField
-                      label="Job Start Target"
-                      value={getMetadataValue('job_start')}
-                      onSave={onUpdateJobStart}
-                      placeholder="Enter job start target"
-                    />
-                  )}
-                  {onUpdateJobDeadline && (
-                    <EditableField
-                      label="Job Deadline"
-                      value={getMetadataValue('job_deadline')}
-                      onSave={onUpdateJobDeadline}
-                      placeholder="Enter job deadline"
-                    />
-                  )}
+                  <EditableField
+                    label="Job Start Target"
+                    value={formatDate(project.job_start_target)}
+                    onSave={handleUpdateJobStart}
+                    placeholder="YYYY-MM-DD"
+                  />
+                  <EditableField
+                    label="Job Deadline"
+                    value={formatDate(project.job_deadline)}
+                    onSave={handleUpdateJobDeadline}
+                    placeholder="YYYY-MM-DD"
+                  />
                 </div>
               </div>
 
@@ -360,11 +429,19 @@ export function SummaryTab({
                 <div className="space-y-2 text-sm">
                   <div>
                     <div className="text-muted-foreground">Missing Data Count</div>
-                    <div className="font-medium">{missingDataCount}</div>
+                    <div className="font-medium">{project.missing_data_count ?? missingDataCount}</div>
                   </div>
                   <div>
                     <div className="text-muted-foreground">Last Updated</div>
-                    <div className="font-medium">{lastUpdated}</div>
+                    <div className="font-medium">
+                      {project.last_summary_update 
+                        ? new Date(project.last_summary_update).toLocaleDateString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric'
+                          })
+                        : lastUpdated}
+                    </div>
                   </div>
                 </div>
               </div>

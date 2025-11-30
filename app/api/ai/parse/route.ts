@@ -21,6 +21,9 @@ const SpecSectionSchema = z.object({
 })
 
 // Structured line item schema (for AI to parse)
+// NOTE: line_items will now ALWAYS be structured objects.
+// If the transcript is vague, use quantity=1, unit_cost=null, total=null (0-like)
+// and explain what's missing in `missing_info`.
 const StructuredLineItemSchema = z.object({
   description: z.string(),
   category: z.enum(['Windows', 'Doors', 'Cabinets', 'Flooring', 'Plumbing', 'Electrical', 'Other']).optional(),
@@ -32,14 +35,11 @@ const StructuredLineItemSchema = z.object({
   notes: z.string().optional(),
 })
 
-// Combined parse result schema - line_items can be strings OR structured objects
+// Combined parse result schema - line_items MUST be structured objects
 const ParseResultSchema = z.object({
   projectId: z.string(),
   spec_sections: z.array(SpecSectionSchema),
-  line_items: z.array(z.union([
-    z.string(), // Backward compatible: simple strings
-    StructuredLineItemSchema // New: structured objects with quantities, costs, etc.
-  ])),
+  line_items: z.array(StructuredLineItemSchema),
   assumptions: z.array(z.string()).optional(),
   missing_info: z.array(z.string()).optional()
 })
@@ -111,9 +111,9 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Process line items - handle both string and structured formats
+    // Process line items - all items are now structured objects
     const processedItems = parseResult.line_items.map((item) => {
-      // If it's already a structured object, use it
+      // All line items are structured objects (enforced by schema)
       if (typeof item === 'object' && item !== null) {
         return {
           category: (item.category || 'Other') as 'Windows' | 'Doors' | 'Cabinets' | 'Flooring' | 'Plumbing' | 'Electrical' | 'Other',
@@ -125,10 +125,10 @@ export async function POST(req: NextRequest) {
           notes: item.notes || null
         }
       }
-      // If it's a string, parse it or use defaults
+      // Fallback for unexpected types (should not happen with structured-only schema)
       return {
         category: 'Other' as const,
-        description: typeof item === 'string' ? item : '',
+        description: '',
         quantity: 1,
         dimensions: null,
         unit_cost: undefined,
@@ -247,14 +247,16 @@ function normalizeAllowances(sections: any[]): any[] {
 }
 
 // Enrich spec sections with items from line_items if they're empty
-function enrichSpecSections(sections: any[], lineItems: (string | any)[]): any[] {
+function enrichSpecSections(sections: any[], lineItems: any[]): any[] {
   return sections.map(section => {
     // If section has no items, try to populate from line_items
     if (section.items.length === 0 && lineItems.length > 0) {
-      // Convert line items to strings for matching
+      // All line items are structured objects
       const lineItemStrings = lineItems.map(item => {
-        if (typeof item === 'string') return item.toLowerCase()
-        return (item.description || '').toLowerCase()
+        if (typeof item === 'object' && item !== null) {
+          return (item.description || '').toLowerCase()
+        }
+        return ''
       })
       
       // Find line items that might belong to this category
@@ -266,21 +268,21 @@ function enrichSpecSections(sections: any[], lineItems: (string | any)[]): any[]
       
       if (relevantItems.length > 0) {
         section.items = relevantItems.map(item => {
-          const description = typeof item === 'string' ? item : (item.description || '')
+          const description = typeof item === 'object' && item !== null ? (item.description || '') : ''
           return {
             text: description,
-            label: null,
-            subitems: []
+          label: null,
+          subitems: []
           }
         })
       } else {
         // If no matches, at least add the first few line items
         section.items = lineItems.slice(0, 3).map(item => {
-          const description = typeof item === 'string' ? item : (item.description || '')
+          const description = typeof item === 'object' && item !== null ? (item.description || '') : ''
           return {
             text: description,
-            label: null,
-            subitems: []
+          label: null,
+          subitems: []
           }
         })
       }
@@ -299,129 +301,302 @@ function enrichSpecSections(sections: any[], lineItems: (string | any)[]): any[]
   })
 }
 
+
+const TRADE_MAPPINGS: Array<{
+  keywords: string[]
+  code: string
+  title: string
+  category: 'Windows' | 'Doors' | 'Cabinets' | 'Flooring' | 'Plumbing' | 'Electrical' | 'Other'
+}> = [
+  { keywords: ['demo', 'demolition', 'remove', 'tear out'], code: '201', title: 'DEMO', category: 'Other' },
+  { keywords: ['framing', 'framer', 'rough carpentry', 'stud'], code: '305', title: 'FRAMING', category: 'Other' },
+  { keywords: ['plumb', 'plumbing', 'fixture', 'pipe'], code: '404', title: 'PLUMBING', category: 'Plumbing' },
+  { keywords: ['electrical', 'lighting', 'wire', 'outlet', 'switch'], code: '405', title: 'ELECTRICAL', category: 'Electrical' },
+  { keywords: ['hvac', 'mechanical', 'vent'], code: '402', title: 'HVAC', category: 'Other' },
+  { keywords: ['window'], code: '520', title: 'WINDOWS', category: 'Windows' },
+  { keywords: ['door'], code: '530', title: 'DOORS', category: 'Doors' },
+  { keywords: ['cabinet', 'millwork', 'built-in'], code: '640', title: 'CABINETRY', category: 'Cabinets' },
+  { keywords: ['countertop', 'counter top', 'solid surface'], code: '641', title: 'COUNTERTOPS', category: 'Cabinets' },
+  { keywords: ['floor', 'flooring', 'hardwood', 'laminate'], code: '960', title: 'FLOORING', category: 'Flooring' },
+  { keywords: ['tile', 'stone'], code: '950', title: 'TILE', category: 'Flooring' },
+  { keywords: ['paint', 'finish', 'coating'], code: '990', title: 'PAINT', category: 'Other' },
+]
+
+function parseNumericValue(value: any): number | null {
+  if (typeof value === 'number' && isFinite(value)) {
+    return value
+  }
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[$,]/g, '').trim()
+    const parsed = Number(cleaned)
+    return isNaN(parsed) ? null : parsed
+  }
+  return null
+}
+
+function matchTradeFromText(text?: string, fallbackCode?: string) {
+  const lower = (text || '').toLowerCase()
+  if (fallbackCode) {
+    const byCode = TRADE_MAPPINGS.find(mapping => mapping.code === fallbackCode)
+    if (byCode) return byCode
+  }
+  for (const mapping of TRADE_MAPPINGS) {
+    if (mapping.keywords.some(keyword => lower.includes(keyword))) {
+      return mapping
+    }
+  }
+  return {
+    keywords: [],
+    code: fallbackCode || '999',
+    title: (text || 'GENERAL').toUpperCase(),
+    category: 'Other' as const,
+  }
+}
+
+function sanitizeSpecItems(items: any, fallbackLabel?: string) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [
+      {
+        text: fallbackLabel || null,
+        label: fallbackLabel || null,
+        subitems: [],
+      },
+    ]
+  }
+
+  return items.map((item: any) => {
+    if (typeof item === 'string') {
+      return {
+        text: item,
+        label: fallbackLabel || null,
+        subitems: [],
+      }
+    }
+
+    return {
+      text: typeof item?.text === 'string' ? item.text : null,
+      label: typeof item?.label === 'string' ? item.label : fallbackLabel || null,
+      subitems: Array.isArray(item?.subitems) ? item.subitems.map((entry: any) => String(entry)) : [],
+    }
+  })
+}
+
+function sanitizeSpecSections(sections: any[] = []): any[] {
+  return sections.map((section, index) => {
+    const tradeSource = `${section?.title || ''} ${section?.label || ''} ${section?.code || ''} ${section?.cost_code || ''}`
+    const trade = matchTradeFromText(tradeSource, section?.code || section?.cost_code)
+    const title = (section?.title || section?.label || trade.title || `SECTION_${index + 1}`).toUpperCase()
+
+    return {
+      code: section?.code || trade.code,
+      title,
+      allowance: parseNumericValue(section?.allowance),
+      items: sanitizeSpecItems(section?.items, section?.label || title),
+      subcontractor: section?.subcontractor ? String(section.subcontractor) : null,
+      notes: section?.notes ? String(section.notes) : null,
+    }
+  })
+}
+
+function sanitizeLineItems(lineItems: any[] = []): Array<Record<string, any>> {
+  return lineItems.map((item) => {
+    // All line items must be structured objects (enforced by schema)
+    // Fallback handling for unexpected types
+    if (!item || typeof item !== 'object') {
+      return {
+        description: typeof item === 'string' ? item : '',
+        category: 'Other' as const,
+        quantity: 1,
+        unit_cost: null,
+        total: null,
+        cost_code: '999',
+        room: 'General',
+        notes: ''
+      }
+    }
+
+    const trade = matchTradeFromText(item.category || item.cost_code || item.description || '')
+    const quantity = typeof item.quantity === 'number' && isFinite(item.quantity)
+      ? item.quantity
+      : parseNumericValue(item.quantity) || 1
+    const unitCost = parseNumericValue(item.unit_cost)
+    const total = parseNumericValue(item.total)
+
+    return {
+      description: item.description ? String(item.description) : trade.title,
+      category: trade.category,
+      quantity,
+      unit_cost: unitCost,
+      total: total ?? (unitCost != null ? unitCost * quantity : null),
+      cost_code: item.cost_code || trade.code,
+      room: item.room ? String(item.room) : 'General',
+      notes: item.notes ? String(item.notes) : (item.allowance ? 'Allowance covers full scope' : ''),
+    }
+  })
+}
+
+function sanitizeStringArray(value: any): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value
+    .map((item) => {
+      if (typeof item === 'string') return item
+      if (item == null) return null
+      return String(item)
+    })
+    .filter((entry): entry is string => Boolean(entry && entry.trim().length > 0))
+}
+
+function sanitizeParseResult(raw: any, fallbackProjectId: string) {
+  const spec_sections = sanitizeSpecSections(Array.isArray(raw?.spec_sections) ? raw.spec_sections : [])
+  const line_items = sanitizeLineItems(Array.isArray(raw?.line_items) ? raw.line_items : [])
+
+  return {
+    projectId: typeof raw?.projectId === 'string' ? raw.projectId : fallbackProjectId,
+    spec_sections,
+    line_items,
+    assumptions: sanitizeStringArray(raw?.assumptions),
+    missing_info: sanitizeStringArray(raw?.missing_info),
+  }
+}
+
 async function parseTranscriptWithAI(
   transcript: string,
   projectId: string,
   apiKey: string
 ): Promise<ParseResult> {
-  const prompt = `You are a professional construction estimator. Convert contractor speech into structured, detailed line items with quantities, costs, categories, and cost codes.
+  const prompt = `You are a senior construction estimator. Parse the contractor transcript into precise JSON that matches ParseResultSchema exactly. Do not change field names or structure.
 
-CRITICAL RULES:
-1. ALWAYS extract quantities from spoken numbers (e.g., "seven windows" → quantity: 7, "three doors" → quantity: 3)
-2. ALWAYS extract unit costs from price mentions (e.g., "$100 each" → unit_cost: 100, "fifty dollars per" → unit_cost: 50)
-3. ALWAYS calculate total = quantity × unit_cost when both are available
-4. ALWAYS assign correct categories: Windows, Doors, Cabinets, Flooring, Plumbing, Electrical, or Other
-5. ALWAYS map categories to cost codes: Windows=520, Doors=530, Cabinets=640, Flooring=960, Plumbing=404, Electrical=405, Other=999
-6. ALWAYS detect room names (Kitchen, Bathroom, Bedroom, Living Room, etc.) or use "General" if not specified
-7. NEVER combine multiple items into one line - separate them
-8. NEVER output unstructured merged descriptions like "Replace seven windows at $100 each"
-9. ALWAYS output structured objects with separate fields for quantity, unit_cost, total, category, etc.
+CORE BEHAVIOR (STRICT)
+1. Allowance Rule — MOST IMPORTANT:
+   When the transcript provides a single allowance for an entire trade (e.g., "demo allowance for the whole thing is $5000"), you MUST:
+     a. Create ONE grouped line item for that trade.
+     b. Set:
+          quantity = 1
+          unit_cost = allowanceAmount
+          total = allowanceAmount
+     c. Create a descriptive line item name that includes the rooms affected:
+          "Complete demolition scope — Kitchen, Family Room, Exterior"
+     d. Set the correct cost code for the trade.
+     e. Add a clear notes field:
+          "Allowance covers entire demo scope."
+     f. Also set spec_section.allowance = allowanceAmount.
+   Never divide the allowance across subtasks.
+   Never leave line_items with unit_cost or total equal to 0 when an allowance was provided.
 
-CATEGORY MAPPING:
-- Windows, window, windows → category: "Windows", cost_code: "520"
-- Door, doors → category: "Doors", cost_code: "530"
-- Cabinet, cabinets, cabinetry → category: "Cabinets", cost_code: "640"
-- Floor, flooring, floor covering → category: "Flooring", cost_code: "960"
-- Plumbing, plumb, pipe, fixture → category: "Plumbing", cost_code: "404"
-- Electrical, wire, outlet, switch, light → category: "Electrical", cost_code: "405"
-- Demo, demolition, remove, tear out → category: "Other", cost_code: "201"
-- Paint, painting → category: "Other", cost_code: "990"
-- Default → category: "Other", cost_code: "999"
+2. Trade Grouping:
+   - Only create multiple line_items for the same trade if the transcript gives separate costs.
+   - Otherwise, always group into ONE line item per trade.
 
-NUMBER CONVERSION EXAMPLES:
-- "one" → 1, "two" → 2, "three" → 3, "four" → 4, "five" → 5
-- "six" → 6, "seven" → 7, "eight" → 8, "nine" → 9, "ten" → 10
-- "eleven" → 11, "twelve" → 12, "thirteen" → 13, "fourteen" → 14, "fifteen" → 15
-- "twenty" → 20, "thirty" → 30, "fifty" → 50, "one hundred" → 100
+3. Room Detection:
+   - Detect rooms such as Kitchen, Family Room, Primary Bath, Bedroom 1, Bedroom 2, Exterior, etc.
+   - Rooms MUST appear in spec_sections as:
+        text: RoomName
+        subitems: bullet list of tasks for that room
+   - For line_items only include "room" if the transcript gives per-room pricing.  
+     Otherwise, set "room": "General".
 
-COST EXTRACTION EXAMPLES:
-- "$100 each" → unit_cost: 100
-- "one hundred dollars per" → unit_cost: 100
-- "$50 per unit" → unit_cost: 50
-- "fifty dollars each" → unit_cost: 50
-- "$25/square foot" → unit_cost: 25 (note: "per square foot" in notes)
+4. No Guessing:
+   - If no price is mentioned and no allowance exists:
+         quantity = 1
+         unit_cost = 0
+         total = 0
+         Add to missing_info: "Need cost for [trade/scope]."
+   - DO NOT invent dimensions, lengths, counts, materials, or costs.
 
-ROOM DETECTION:
-- "kitchen" → room: "Kitchen"
-- "bathroom" → room: "Bathroom"
-- "bedroom" → room: "Bedroom"
-- "living room" → room: "Living Room"
-- "family room" → room: "Family Room"
-- If no room mentioned → room: "General"
+5. Line Item Format (required for each object):
+   description
+   category
+   quantity
+   unit_cost
+   total
+   cost_code
+   room
+   notes
 
-EXAMPLE INPUT: "Replace seven windows at one hundred dollars each in the kitchen"
+CATEGORY + COST CODE MAPPING:
+- Demo / demolition → category "Other", cost_code "201"
+- Framing / rough carpentry → category "Other", cost_code "305"
+- Plumbing → category "Plumbing", cost_code "404"
+- Electrical → category "Electrical", cost_code "405"
+- HVAC / mechanical → category "Other", cost_code "402"
+- Windows → category "Windows", cost_code "520"
+- Doors → category "Doors", cost_code "530"
+- Cabinets / built-ins → category "Cabinets", cost_code "640"
+- Countertops → category "Cabinets", cost_code "641"
+- Tile / stone → category "Flooring", cost_code "950"
+- Flooring → category "Flooring", cost_code "960"
+- Paint / coatings → category "Other", cost_code "990"
+- Default fallback → category "Other", cost_code "999"
 
-EXAMPLE OUTPUT:
-{
-  "line_items": [
-    {
-      "description": "Replace window",
-      "category": "Windows",
-      "quantity": 7,
-      "unit_cost": 100,
-      "total": 700,
-      "cost_code": "520",
-      "room": "Kitchen",
-      "notes": ""
-    }
-  ]
-}
+Note: Category must be one of: "Windows", "Doors", "Cabinets", "Flooring", "Plumbing", "Electrical", or "Other".
 
-For spec_sections:
-- Detect categories like DEMO, FRAMING, PLUMBING, ELECTRICAL, HVAC, WINDOWS, STUCCO, CABINETRY, COUNTERTOPS, FLOORING, TILE, PAINT.
-- Map them to codes: DEMO=201, FRAMING=305, PLUMBING=404, ELECTRICAL=405, HVAC=402, WINDOWS=520, STUCCO=703, CABINETRY=640, COUNTERTOPS=641, FLOORING=960, TILE=950, PAINT=990.
-- Extract allowances ("Allowance: $5000" → 5000).
-- Extract subcontractors.
-- Convert sentences into bullet lists.
-- If the user says "Family room:" treat it as a label with subitems.
-- Never leave items empty.
-- Never leave allowances null if mentioned.
-- Never output empty sections.
+SPEC SECTIONS:
+SPEC SECTION CONSOLIDATION RULE (CRITICAL):
+For each trade (e.g. DEMO 201), you MUST generate exactly ONE spec_section object.
 
-PROJECT DESCRIPTION:
-${transcript}
+Do NOT output multiple spec_sections with the same code/title.
+Do NOT split DEMO into multiple sections per room.
 
-Return ONLY valid JSON matching this exact schema. You MUST use structured objects for line_items:
+Instead:
+- Create a single spec_section for the trade.
+- Each room becomes one item inside that section:
+    { "text": "Kitchen", "subitems": [...] }
+    { "text": "Family Room", "subitems": [...] }
+    { "text": "Exterior", "subitems": [...] }
+
+Do NOT repeat the trade name ("DEMO") at the item level.
+Do NOT add duplicate section headers.
+Do NOT wrap items inside additional section layers.
+
+Example of correct structure:
+
+"spec_sections": [
+  {
+    "code": "201",
+    "title": "DEMO",
+    "allowance": 5000,
+    "items": [
+      { "text": "Kitchen", "subitems": [ "Remove upper cabinets", "Remove lower cabinets", "Remove soffit", "Remove bar area", "Open wall for plumbing" ] },
+      { "text": "Family Room", "subitems": [ "Remove fireplace", "Remove sheetrock", "Remove two small windows" ] },
+      { "text": "Exterior", "subitems": [ "Cut stucco around openings" ] }
+    ]
+  }
+]
+
+Never output:
+DEMO 201
+DEMO 201
+DEMO 201
+before each room.
+
+Always consolidate into ONE trade section with multiple room items.
+
+- Create ONE spec_section per trade.
+- Use the correct title + code (e.g., DEMO 201).
+- Inside each section:
+     items = array of { text, label, subitems }
+- Each room should be:
+     text: "Kitchen"
+     subitems: ["Remove upper cabinets", "Remove lower cabinets", …]
+- Only assign allowance at the section level when explicitly mentioned.
+
+OUTPUT FORMAT:
+Return strictly:
 {
   "projectId": "${projectId}",
-  "spec_sections": [
-    {
-      "code": "520",
-      "title": "WINDOWS",
-      "allowance": null,
-      "items": [
-        {
-          "text": "Replace window",
-          "label": null,
-          "subitems": []
-        }
-      ],
-      "subcontractor": null,
-      "notes": null
-    }
-  ],
-  "line_items": [
-    {
-      "description": "Replace window",
-      "category": "Windows",
-      "quantity": 7,
-      "unit_cost": 100,
-      "total": 700,
-      "cost_code": "520",
-      "room": "Kitchen",
-      "notes": ""
-    }
-  ],
-  "assumptions": ["Assumptions made during estimation"],
-  "missing_info": ["Information that needs clarification"]
+  "spec_sections": [...],
+  "line_items": [...],
+  "assumptions": [...],
+  "missing_info": [...]
 }
 
-IMPORTANT: 
-- line_items MUST be an array of structured objects, NOT strings
-- Each object MUST have description, category, quantity, unit_cost, total
-- Extract ALL numbers and costs from the speech
-- Separate multiple items into individual line items
-- Be precise and conservative. If any information is unclear, add it to missing_info rather than guessing.`
+All numbers must be numeric (no commas, no "$").
+Return JSON only, no markdown.
+
+TRANSCRIPT:
+${transcript}`
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -434,7 +609,23 @@ IMPORTANT:
       messages: [
         {
           role: 'system',
-          content: 'You are a professional construction estimator AI. Your task is to parse contractor speech into structured line items with quantities, unit costs, totals, categories, cost codes, and rooms. You MUST extract all numerical values (quantities, prices) from spoken text. Convert number words to digits. Calculate totals automatically. Assign correct categories and cost codes. Detect room names or use "General". Separate multiple items into individual line items. NEVER combine items into unstructured descriptions. ALWAYS output line_items as an array of structured objects (NOT strings) with description, category, quantity, unit_cost, total, cost_code, and room fields. Return only valid JSON matching the exact schema. Never leave items empty. Never leave allowances null if mentioned. Always include projectId in your response.'
+          content: [
+            'You are Estimatix\'s parsing engine, a senior construction estimator AI.',
+            'Your job is to convert contractor speech into STRICTLY structured JSON that matches ParseResultSchema exactly.',
+            '',
+            'Hard rules:',
+            '- Always return valid JSON with no comments, no trailing commas, no markdown.',
+            '- Never return plain strings in line_items. Every line item MUST be a structured object.',
+            '- Never invent IDs. Use the projectId exactly as provided in the user prompt.',
+            '- All numeric fields must be bare numbers (no "$", no commas).',
+            '- If information is vague or missing, use sensible defaults (quantity=1, unit_cost=null, total=null) and record what is missing in missing_info.',
+            '',
+            'Proposal vs Estimate responsibilities:',
+            '- spec_sections: for human-readable spec sheet (proposal PDF). One section per trade (per cost code). Use bullets and sub-bullets, grouped by room.',
+            '- line_items: for internal estimating ONLY (no need to match the PDF exactly). One main priced line item per trade when the cost or allowance is lump-sum.',
+            '',
+            'You must obey the user prompt exactly. If any conflict exists, prefer the user prompt.'
+          ].join('\n')
         },
         {
           role: 'user',
@@ -465,24 +656,27 @@ IMPORTANT:
 
   try {
     const parsed = JSON.parse(content)
+    const sanitized = sanitizeParseResult(parsed, projectId)
     
-    // Log parsed JSON
-    console.log('AI PARSED JSON:', JSON.stringify(parsed, null, 2))
+    // Log sanitized JSON
+    console.log('AI PARSED JSON:', JSON.stringify(sanitized, null, 2))
     
     // Validate with Zod schema
-    const validated = ParseResultSchema.parse(parsed)
+    const validated = ParseResultSchema.parse(sanitized)
     
-    // Ensure line_items are properly formatted (handle both string and object formats)
+    // Ensure line_items are properly formatted (all items are structured objects)
     const normalizedLineItems = validated.line_items.map(item => {
-      if (typeof item === 'string') {
-        // Keep as string for backward compatibility
-        return item
-      }
-      // Ensure structured objects have required fields
+      // All line items are structured objects (enforced by schema)
+      const categoryOptions: Array<'Windows' | 'Doors' | 'Cabinets' | 'Flooring' | 'Plumbing' | 'Electrical' | 'Other'> = 
+        ['Windows', 'Doors', 'Cabinets', 'Flooring', 'Plumbing', 'Electrical', 'Other']
+      const validCategory = item.category && categoryOptions.includes(item.category as any) 
+        ? item.category 
+        : 'Other' as const
+
       if (item && typeof item === 'object') {
         return {
           description: item.description || '',
-          category: item.category || 'Other',
+          category: validCategory,
           quantity: item.quantity ?? 1,
           unit_cost: item.unit_cost ?? null,
           total: item.total ?? (item.quantity && item.unit_cost ? item.quantity * item.unit_cost : null),
@@ -491,7 +685,17 @@ IMPORTANT:
           notes: item.notes || ''
         }
       }
-      return item
+      // Fallback for unexpected types (should not happen with structured-only schema)
+      return {
+        description: '',
+        category: 'Other' as const,
+        quantity: 1,
+        unit_cost: null,
+        total: null,
+        cost_code: '999',
+        room: 'General',
+        notes: ''
+      }
     })
     
     return {

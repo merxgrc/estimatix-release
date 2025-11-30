@@ -18,8 +18,9 @@ import { PhotosTab } from "./_components/PhotosTab"
 import { DocumentsTab } from "./_components/DocumentsTab"
 import { WalkTab } from "./_components/WalkTab"
 import { ProposalsTab } from "./_components/ProposalsTab"
-import type { Project, Estimate, Upload } from "@/types/db"
+import type { Project, Estimate, Upload, Profile } from "@/types/db"
 import { ArrowLeft, Trash2 } from "lucide-react"
+import { supabase } from "@/lib/supabase/client"
 
 export default function ProjectDetailPage() {
   const router = useRouter()
@@ -31,6 +32,7 @@ export default function ProjectDetailPage() {
   const [estimates, setEstimates] = useState<Estimate[]>([])
   const [photos, setPhotos] = useState<{ url: string; id: string }[]>([])
   const [documents, setDocuments] = useState<{ url: string; name: string; id: string }[]>([])
+  const [estimatorProfile, setEstimatorProfile] = useState<Profile | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeEstimateId, setActiveEstimateId] = useState<string | null>(null)
@@ -117,6 +119,23 @@ export default function ProjectDetailPage() {
         
         setPhotos(photosData)
         setDocuments(documentsData)
+        
+        // Fetch estimator profile using client-side Supabase
+        if (projectData.user_id) {
+          try {
+            const { data: profile, error } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', projectData.user_id)
+              .single()
+            
+            if (!error && profile) {
+              setEstimatorProfile(profile)
+            }
+          } catch (err) {
+            console.warn('Could not load estimator profile:', err)
+          }
+        }
         
         // Set the most recent estimate as active if any exist
         if (estimatesData.length > 0) {
@@ -257,105 +276,61 @@ export default function ProjectDetailPage() {
     }
   }
 
-  const handleUpdateProjectTitle = async (newTitle: string) => {
-    if (!project) return
-    
-    await db.updateProject(projectId, { title: newTitle })
-    // Update local state
-    setProject({ ...project, title: newTitle })
-  }
-
-  const handleUpdateProjectOwner = async (ownerName: string) => {
-    if (!project) return
-    
-    await db.updateProject(projectId, { owner_name: ownerName || null })
-    // Update local state
-    setProject({ ...project, owner_name: ownerName || null })
-  }
-
-  const handleUpdateProjectAddress = async (address: string) => {
-    if (!project) return
-    
-    await db.updateProject(projectId, { project_address: address || null })
-    // Update local state
-    setProject({ ...project, project_address: address || null })
-  }
-
-  // Helper to update metadata stored in notes as JSON
-  const updateMetadata = async (key: string, value: string) => {
-    if (!project) return
+  // Refresh function to reload project data after metadata updates
+  const refreshProjectData = async () => {
+    if (!projectId || !user) return
 
     try {
-      // Parse existing notes or create new metadata object
-      let metadata: Record<string, string> = {}
-      let existingData: any = {}
-      
-      if (project.notes) {
-        try {
-          const parsed = JSON.parse(project.notes)
-          if (typeof parsed === 'object' && parsed !== null) {
-            if ('metadata' in parsed) {
-              metadata = parsed.metadata
+      const [projectData, estimatesData, uploadsData] = await Promise.all([
+        db.getProject(projectId),
+        db.getEstimates(projectId),
+        db.getUploads(projectId).catch(() => [])
+      ])
+
+      if (projectData) {
+        setProject(projectData)
+        setEstimates(estimatesData)
+        
+        // Update photos and documents
+        const photosData = uploadsData
+          .filter(u => u.kind === 'photo')
+          .map(u => ({ url: u.file_url, id: u.id }))
+        
+        const documentsData = uploadsData
+          .filter(u => u.kind === 'blueprint')
+          .map(u => {
+            const originalFilename = (u as any).original_filename
+            let filename = originalFilename
+            if (!filename) {
+              const urlParts = u.file_url.split('/')
+              filename = urlParts[urlParts.length - 1] || 'Document'
             }
-            // Preserve other fields in notes
-            existingData = { ...parsed }
-            delete existingData.metadata
+            return { url: u.file_url, name: filename, id: u.id }
+          })
+        
+        setPhotos(photosData)
+        setDocuments(documentsData)
+
+        // Refresh profile if needed
+        if (projectData.user_id) {
+          try {
+            const { data: profile, error } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', projectData.user_id)
+              .single()
+            
+            if (!error && profile) {
+              setEstimatorProfile(profile)
+            }
+          } catch (err) {
+            console.warn('Could not refresh estimator profile:', err)
           }
-        } catch (e) {
-          // If notes is not JSON, create new structure
         }
       }
-
-      // Update the metadata key
-      metadata[key] = value || ''
-
-      // Create notes structure with metadata
-      const notesData = {
-        ...existingData,
-        metadata
-      }
-
-      // Save to database
-      await db.updateProject(projectId, { notes: JSON.stringify(notesData) })
-      
-      // Update local state
-      setProject({ ...project, notes: JSON.stringify(notesData) })
-    } catch (error) {
-      console.error('Error updating metadata:', error)
-      throw error
+    } catch (err) {
+      console.error('Error refreshing project data:', err)
     }
-  }
-
-  const handleUpdateProjectType = async (value: string) => {
-    await updateMetadata('project_type', value)
-  }
-
-  const handleUpdateYearBuilt = async (value: string) => {
-    await updateMetadata('year_built', value)
-  }
-
-  const handleUpdateHomeSize = async (value: string) => {
-    await updateMetadata('home_size', value)
-  }
-
-  const handleUpdateLotSize = async (value: string) => {
-    await updateMetadata('lot_size', value)
-  }
-
-  const handleUpdateBedrooms = async (value: string) => {
-    await updateMetadata('bedrooms', value)
-  }
-
-  const handleUpdateBathrooms = async (value: string) => {
-    await updateMetadata('bathrooms', value)
-  }
-
-  const handleUpdateJobStart = async (value: string) => {
-    await updateMetadata('job_start', value)
-  }
-
-  const handleUpdateJobDeadline = async (value: string) => {
-    await updateMetadata('job_deadline', value)
   }
 
   const handleUploadPhoto = async (file: File) => {
@@ -590,11 +565,26 @@ export default function ProjectDetailPage() {
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back
                 </Button>
-                <EditableProjectTitle
-                  title={project.title}
-                  onSave={handleUpdateProjectTitle}
-                  variant="default"
-                />
+                <div className="flex flex-col">
+                  <EditableProjectTitle
+                    title={project.title}
+                    onSave={async (newTitle: string) => {
+                      await db.updateProject(projectId, { title: newTitle })
+                      setProject({ ...project, title: newTitle })
+                    }}
+                    variant="default"
+                  />
+                  {estimatorProfile && (
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {estimatorProfile.full_name && (
+                        <span>Estimator: {estimatorProfile.full_name}</span>
+                      )}
+                      {estimatorProfile.company_name && (
+                        <span className="ml-2">• {estimatorProfile.company_name}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <Button
@@ -641,17 +631,7 @@ export default function ProjectDetailPage() {
                   estimates={estimates}
                   photos={photos}
                   documents={documents}
-                  onUpdateTitle={handleUpdateProjectTitle}
-                  onUpdateOwner={handleUpdateProjectOwner}
-                  onUpdateAddress={handleUpdateProjectAddress}
-                  onUpdateProjectType={handleUpdateProjectType}
-                  onUpdateYearBuilt={handleUpdateYearBuilt}
-                  onUpdateHomeSize={handleUpdateHomeSize}
-                  onUpdateLotSize={handleUpdateLotSize}
-                  onUpdateBedrooms={handleUpdateBedrooms}
-                  onUpdateBathrooms={handleUpdateBathrooms}
-                  onUpdateJobStart={handleUpdateJobStart}
-                  onUpdateJobDeadline={handleUpdateJobDeadline}
+                  onRefresh={refreshProjectData}
                   onUploadPhoto={handleUploadPhoto}
                   onUploadDocument={handleUploadDocument}
                   onDeletePhoto={handleDeletePhoto}

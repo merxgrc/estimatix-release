@@ -14,3 +14,4 @@ export function ProposalsTab({ project }: ProposalsTabProps) {
   )
 }
 
+

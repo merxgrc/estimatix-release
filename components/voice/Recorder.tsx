@@ -30,7 +30,14 @@ export function Recorder({ projectId, onRecordingComplete }: RecorderProps) {
   const streamRef = useRef<MediaStream | null>(null)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const transcriptRef = useRef<string>('')
+  const completionCalledRef = useRef<boolean>(false)
   const { user } = useAuth()
+
+  // Keep transcript ref in sync with state
+  useEffect(() => {
+    transcriptRef.current = transcript
+  }, [transcript])
 
   // Check microphone permission on mount
   useEffect(() => {
@@ -68,6 +75,7 @@ export function Recorder({ projectId, onRecordingComplete }: RecorderProps) {
       
       streamRef.current = stream
       audioChunksRef.current = []
+      completionCalledRef.current = false
       
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/wav'
@@ -87,6 +95,27 @@ export function Recorder({ projectId, onRecordingComplete }: RecorderProps) {
         })
         setAudioBlob(audioBlob)
         stopTranscription()
+        
+        // Auto-trigger completion with client transcript if available
+        // This allows users to proceed without clicking "Save Recording"
+        // Use ref to get latest transcript value
+        const currentTranscript = transcriptRef.current
+        if (onRecordingComplete && currentTranscript && currentTranscript.trim().length > 0 && !completionCalledRef.current) {
+          // Wait a bit for speech recognition to finalize and ensure auth is ready
+          setTimeout(() => {
+            const finalTranscript = transcriptRef.current
+            if (!completionCalledRef.current && finalTranscript && finalTranscript.trim().length > 0) {
+              // Only auto-trigger if user is authenticated (prevents API key errors)
+              if (user && user.id) {
+                completionCalledRef.current = true
+                onRecordingComplete(audioBlob, finalTranscript)
+              } else {
+                // If user not ready, log but don't fail - user can click "Save Recording" later
+                console.warn('User not authenticated yet, skipping auto-completion. User can click "Save Recording" to proceed.')
+              }
+            }
+          }, 500)
+        }
       }
       
       mediaRecorder.start(1000) // Collect data every second
@@ -285,7 +314,12 @@ export function Recorder({ projectId, onRecordingComplete }: RecorderProps) {
       setTranscript(enhancedTranscript)
       
       setUploadSuccess(true)
-      onRecordingComplete?.(audioBlob, enhancedTranscript)
+      
+      // Only call completion if not already called (e.g., by auto-trigger)
+      if (!completionCalledRef.current) {
+        completionCalledRef.current = true
+        onRecordingComplete?.(audioBlob, enhancedTranscript)
+      }
       
     } catch (err) {
       console.error('Upload error details:', {
@@ -310,6 +344,7 @@ export function Recorder({ projectId, onRecordingComplete }: RecorderProps) {
     setElapsedTime(0)
     setUploadSuccess(false)
     setError(null)
+    completionCalledRef.current = false
   }
 
   if (permissionGranted === false) {

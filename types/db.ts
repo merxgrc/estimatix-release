@@ -18,6 +18,16 @@ export interface Database {
           owner_name: string | null
           project_address: string | null
           notes: string | null
+          project_type: string | null
+          year_built: number | null
+          home_size_sqft: number | null
+          lot_size_sqft: number | null
+          bedrooms: number | null
+          bathrooms: number | null
+          job_start_target: string | null
+          job_deadline: string | null
+          missing_data_count: number | null
+          last_summary_update: string | null
           created_at: string
         }
         Insert: {
@@ -28,6 +38,16 @@ export interface Database {
           owner_name?: string | null
           project_address?: string | null
           notes?: string | null
+          project_type?: string | null
+          year_built?: number | null
+          home_size_sqft?: number | null
+          lot_size_sqft?: number | null
+          bedrooms?: number | null
+          bathrooms?: number | null
+          job_start_target?: string | null
+          job_deadline?: string | null
+          missing_data_count?: number | null
+          last_summary_update?: string | null
           created_at?: string
         }
         Update: {
@@ -38,9 +58,120 @@ export interface Database {
           owner_name?: string | null
           project_address?: string | null
           notes?: string | null
+          project_type?: string | null
+          year_built?: number | null
+          home_size_sqft?: number | null
+          lot_size_sqft?: number | null
+          bedrooms?: number | null
+          bathrooms?: number | null
+          job_start_target?: string | null
+          job_deadline?: string | null
+          missing_data_count?: number | null
+          last_summary_update?: string | null
           created_at?: string
         }
         Relationships: []
+      }
+      profiles: {
+        Row: {
+          id: string
+          full_name: string | null
+          company_name: string | null
+          phone: string | null
+          role: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id: string
+          full_name?: string | null
+          company_name?: string | null
+          phone?: string | null
+          role?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          full_name?: string | null
+          company_name?: string | null
+          phone?: string | null
+          role?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "profiles_id_fkey"
+            columns: ["id"]
+            isOneToOne: true
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      estimate_line_items: {
+        Row: {
+          id: string
+          estimate_id: string
+          project_id: string
+          room_name: string | null
+          scope: string | null
+          description: string | null
+          quantity: number | null
+          unit: string | null
+          unit_cost: number | null
+          total: number | null
+          cost_code: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          estimate_id: string
+          project_id: string
+          room_name?: string | null
+          scope?: string | null
+          description?: string | null
+          quantity?: number | null
+          unit?: string | null
+          unit_cost?: number | null
+          total?: number | null
+          cost_code?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          estimate_id?: string
+          project_id?: string
+          room_name?: string | null
+          scope?: string | null
+          description?: string | null
+          quantity?: number | null
+          unit?: string | null
+          unit_cost?: number | null
+          total?: number | null
+          cost_code?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "estimate_line_items_estimate_id_fkey"
+            columns: ["estimate_id"]
+            isOneToOne: false
+            referencedRelation: "estimates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "estimate_line_items_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          }
+        ]
       }
       uploads: {
         Row: {
@@ -48,6 +179,7 @@ export interface Database {
           project_id: string
           file_url: string
           kind: 'photo' | 'blueprint' | 'audio'
+          original_filename: string | null
           created_at: string
         }
         Insert: {
@@ -55,6 +187,7 @@ export interface Database {
           project_id: string
           file_url: string
           kind: 'photo' | 'blueprint' | 'audio'
+          original_filename?: string | null
           created_at?: string
         }
         Update: {
@@ -62,6 +195,7 @@ export interface Database {
           project_id?: string
           file_url?: string
           kind?: 'photo' | 'blueprint' | 'audio'
+          original_filename?: string | null
           created_at?: string
         }
         Relationships: [
@@ -137,6 +271,14 @@ export type UploadUpdate = Database['public']['Tables']['uploads']['Update']
 export type Estimate = Database['public']['Tables']['estimates']['Row']
 export type EstimateInsert = Database['public']['Tables']['estimates']['Insert']
 export type EstimateUpdate = Database['public']['Tables']['estimates']['Update']
+
+export type Profile = Database['public']['Tables']['profiles']['Row']
+export type ProfileInsert = Database['public']['Tables']['profiles']['Insert']
+export type ProfileUpdate = Database['public']['Tables']['profiles']['Update']
+
+export type EstimateLineItem = Database['public']['Tables']['estimate_line_items']['Row']
+export type EstimateLineItemInsert = Database['public']['Tables']['estimate_line_items']['Insert']
+export type EstimateLineItemUpdate = Database['public']['Tables']['estimate_line_items']['Update']
 
 // Upload kind type
 export type UploadKind = 'photo' | 'blueprint' | 'audio'

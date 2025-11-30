@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Sidebar } from "@/components/sidebar"
 import { Recorder } from "@/components/voice/Recorder"
@@ -85,6 +85,7 @@ export default function RecordPage() {
             user_id: user.id,
             title: projectInfo.projectName,
             client_name: projectInfo.clientName,
+            project_address: projectInfo.clientAddress || null,
             notes: projectInfo.projectDescription,
           })
           .select()
@@ -92,11 +93,20 @@ export default function RecordPage() {
 
         if (error) {
           console.error('Error creating project:', error)
-          setParseError(`Failed to create project: ${error.message}`)
+          
+          // Handle specific Supabase API key errors
+          if (error.message && (error.message.includes('API key') || error.message.includes('apikey'))) {
+            console.warn('Supabase API key error during project creation - this may be a timing issue')
+            setParseError('Authentication issue. Please wait a moment and refresh the page, or try again.')
+          } else {
+            setParseError(`Failed to create project: ${error.message || 'Unknown error'}`)
+          }
           return
         }
 
         setProjectId(project.id)
+
+        // Metadata is already set during project creation, no need to sync again
       } catch (err) {
         console.error('Error creating project:', err)
         setParseError('Failed to create project')
@@ -109,12 +119,33 @@ export default function RecordPage() {
   }, [projectInfo, user, projectId])
 
   const handleRecordingComplete = async (audioBlob: Blob, transcript: string) => {
+    if (!transcript || transcript.trim().length === 0) {
+      setParseError('No transcript was generated. Please try recording again.')
+      return
+    }
     setTranscript(transcript)
     setCurrentStep('parse')
-    
-    // Parse transcript with AI
-    await parseTranscript(transcript)
+    setParseError(null)
   }
+
+  // Auto-parse when both transcript and projectId are available
+  const parseTriggeredRef = useRef(false)
+  useEffect(() => {
+    if (currentStep === 'parse' && transcript && transcript.trim().length > 0 && projectId && !isParsing && !estimateData && !parseError && !parseTriggeredRef.current) {
+      parseTriggeredRef.current = true
+      const timer = setTimeout(() => {
+        parseTranscript(transcript)
+      }, 200) // Small delay to ensure state is settled
+      return () => clearTimeout(timer)
+    }
+  }, [currentStep, transcript, projectId, isParsing, estimateData, parseError])
+  
+  // Reset parse trigger when resetting flow
+  useEffect(() => {
+    if (currentStep === 'record') {
+      parseTriggeredRef.current = false
+    }
+  }, [currentStep])
 
   const parseTranscript = async (incomingTranscript: string) => {
     setIsParsing(true)
@@ -123,6 +154,13 @@ export default function RecordPage() {
     // Wait for project to be created if needed
     if (!projectId) {
       setParseError('Project is being created. Please wait...')
+      setIsParsing(false)
+      return
+    }
+
+    // Ensure user is authenticated
+    if (!user || !user.id) {
+      setParseError('You must be logged in to parse transcript. Please refresh the page.')
       setIsParsing(false)
       return
     }
@@ -152,16 +190,35 @@ export default function RecordPage() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || `Parse failed: ${response.status}`)
+        const errorMessage = errorData.error || `Parse failed: ${response.status} ${response.statusText}`
+        
+        // Check if it's an API key error - provide helpful message
+        if (errorMessage.includes('API key') || errorMessage.includes('apikey')) {
+          console.error('API key error in parse:', errorData)
+          throw new Error('Authentication error. Please refresh the page and try again.')
+        }
+        
+        throw new Error(errorMessage)
       }
 
       const result = await response.json()
       setEstimateData(result.data)
       setEstimateId(result.estimateId ?? null)
       setCurrentStep('estimate')
+
+      // Metadata is already set during project creation, no need to sync again
     } catch (error) {
       console.error('Parse error:', error)
-      setParseError(error instanceof Error ? error.message : 'Failed to parse transcript')
+      const errorMessage = error instanceof Error ? error.message : 'Failed to parse transcript'
+      
+      // Filter out Supabase API key errors in console (they're often harmless timing issues)
+      if (errorMessage.includes('API key') || errorMessage.includes('apikey')) {
+        console.warn('Supabase API key warning (may be harmless):', error)
+        // Still show user-friendly error
+        setParseError('Authentication issue. Please wait a moment and try again, or refresh the page.')
+      } else {
+        setParseError(errorMessage)
+      }
     } finally {
       setIsParsing(false)
     }
@@ -289,7 +346,33 @@ export default function RecordPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {isParsing ? (
+                  {/* Show transcript preview */}
+                  {transcript && (
+                    <div className="p-4 bg-muted rounded-lg mb-4">
+                      <div className="text-sm font-medium text-muted-foreground mb-2">
+                        Transcript:
+                      </div>
+                      <div className="text-sm whitespace-pre-wrap">
+                        {transcript}
+                      </div>
+                    </div>
+                  )}
+
+                  {!projectId && isCreatingProject ? (
+                    <div className="text-center py-8">
+                      <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent"></div>
+                      <p className="text-muted-foreground">Creating project...</p>
+                      <p className="text-sm text-muted-foreground mt-2">Please wait while we set up your project</p>
+                    </div>
+                  ) : !projectId ? (
+                    <div className="text-center py-8">
+                      <div className="text-yellow-600 mb-4">⚠️ Waiting for Project</div>
+                      <p className="text-muted-foreground mb-4">Project creation is taking longer than expected.</p>
+                      <Button onClick={resetFlow} variant="outline">
+                        Start Over
+                      </Button>
+                    </div>
+                  ) : isParsing ? (
                     <div className="text-center py-8">
                       <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent"></div>
                       <p className="text-muted-foreground">Processing transcript...</p>
@@ -299,15 +382,17 @@ export default function RecordPage() {
                       <div className="text-red-600 mb-4">❌ Parse Error</div>
                       <p className="text-muted-foreground mb-4">{parseError}</p>
                       <div className="flex justify-center space-x-4">
-                        <Button onClick={() => parseTranscript(transcript)} variant="outline">
-                          Try Again
-                        </Button>
+                        {transcript && (
+                          <Button onClick={() => parseTranscript(transcript)} variant="outline">
+                            Try Again
+                          </Button>
+                        )}
                         <Button onClick={resetFlow} variant="outline">
                           Start Over
                         </Button>
                       </div>
                     </div>
-                  ) : (
+                  ) : estimateData ? (
                     <div className="text-center py-8">
                       <div className="text-green-600 mb-4">✅ Parse Complete</div>
                       <p className="text-muted-foreground mb-4">
@@ -316,6 +401,11 @@ export default function RecordPage() {
                       <Button onClick={() => setCurrentStep('estimate')} className="bg-blue-600 hover:bg-blue-700">
                         Continue to Estimate
                       </Button>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent"></div>
+                      <p className="text-muted-foreground">Preparing to parse...</p>
                     </div>
                   )}
                 </CardContent>
