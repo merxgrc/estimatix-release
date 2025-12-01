@@ -288,9 +288,48 @@ export type Profile = Database['public']['Tables']['profiles']['Row']
 export type ProfileInsert = Database['public']['Tables']['profiles']['Insert']
 export type ProfileUpdate = Database['public']['Tables']['profiles']['Update']
 
-export type EstimateLineItem = Database['public']['Tables']['estimate_line_items']['Row']
+// Base types from Supabase Database schema (for database operations)
+export type EstimateLineItemRow = Database['public']['Tables']['estimate_line_items']['Row']
 export type EstimateLineItemInsert = Database['public']['Tables']['estimate_line_items']['Insert']
 export type EstimateLineItemUpdate = Database['public']['Tables']['estimate_line_items']['Update']
+
+// Extended EstimateLineItem interface supporting new pricing model
+export interface EstimateLineItem {
+  id?: string
+  estimate_id?: string
+
+  description: string
+  category?: string
+  cost_code?: string
+  room?: string
+
+  quantity?: number
+  unit?: string
+
+  // Cost breakdown fields
+  labor_cost?: number
+  material_cost?: number
+  overhead_cost?: number
+  direct_cost?: number
+  margin_percent?: number
+  client_price?: number
+
+  // Unit-level pricing (for reference)
+  unit_labor_cost?: number
+  unit_material_cost?: number
+  unit_total_cost?: number
+  total_direct_cost?: number
+
+  // Pricing metadata
+  pricing_source?: 'task_library' | 'user_library' | 'manual'
+  confidence?: number
+  matched_via?: 'semantic' | 'fuzzy' | 'cost_code_only'
+
+  notes?: string
+}
+
+// Backward compatibility: export the database row type with the old name
+export type EstimateLineItemBase = EstimateLineItemRow
 
 // Upload kind type
 export type UploadKind = 'photo' | 'blueprint' | 'audio'

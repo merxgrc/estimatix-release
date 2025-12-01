@@ -13,6 +13,7 @@ import { EditableProjectTitle } from "@/components/editable-project-title"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { SummaryTab } from "./_components/SummaryTab"
 import { EstimateTab } from "./_components/EstimateTab"
+import { PricingTab } from "./_components/PricingTab"
 import { RoomsTab } from "./_components/RoomsTab"
 import { PhotosTab } from "./_components/PhotosTab"
 import { DocumentsTab } from "./_components/DocumentsTab"
@@ -621,9 +622,10 @@ export default function ProjectDetailPage() {
           <main className="p-4 md:p-6">
             {/* Tab Navigation */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="w-full grid grid-cols-7 gap-1">
+              <TabsList className="w-full grid grid-cols-8 gap-1">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="estimate">Estimate</TabsTrigger>
+                <TabsTrigger value="pricing">Pricing</TabsTrigger>
                 <TabsTrigger value="rooms">Rooms</TabsTrigger>
                 <TabsTrigger value="photos">Photos</TabsTrigger>
                 <TabsTrigger value="documents">Documents</TabsTrigger>
@@ -661,6 +663,14 @@ export default function ProjectDetailPage() {
                   onSave={handleEstimateSave}
                   onRecordingComplete={handleRecordingComplete}
                   isParsing={isParsing}
+                />
+              </TabsContent>
+
+              <TabsContent value="pricing">
+                <PricingTab
+                  project={project}
+                  estimates={estimates}
+                  activeEstimateId={activeEstimateId}
                 />
               </TabsContent>
 

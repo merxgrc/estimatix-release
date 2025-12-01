@@ -26,13 +26,28 @@ const SpecSectionSchema = z.object({
 // AI sets labor_cost, margin_percent, client_price to null (user fills these in UI).
 const StructuredLineItemSchema = z.object({
   description: z.string(),
-  category: z.enum(['Windows', 'Doors', 'Cabinets', 'Flooring', 'Plumbing', 'Electrical', 'HVAC', 'Demo', 'Framing', 'Paint', 'Countertops', 'Tile', 'Other']).optional(),
+  category: z.string().optional(),
   cost_code: z.string().optional(),
   room: z.string().optional(),
+
+  quantity: z.number().optional(),
+  unit: z.string().optional(),
+
+  unit_labor_cost: z.number().optional().nullable(),
+  unit_material_cost: z.number().optional().nullable(),
+  unit_total_cost: z.number().optional().nullable(),
+
+  total_direct_cost: z.number().optional().nullable(),
+
+  pricing_source: z.enum(['task_library', 'user_library', 'manual']).optional(),
+  confidence: z.number().optional(),
+
+  notes: z.string().optional(),
+
+  // Legacy fields for backward compatibility
   labor_cost: z.number().nullable().optional(),
   margin_percent: z.number().nullable().optional(),
   client_price: z.number().nullable().optional(),
-  notes: z.string().optional(),
 })
 
 // Combined parse result schema - line_items MUST be structured objects

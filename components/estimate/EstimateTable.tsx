@@ -8,26 +8,29 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Save, AlertTriangle, Plus, Trash2, FileText, Download } from 'lucide-react'
+import { Save, AlertTriangle, Plus, Trash2, FileText, Download, BookOpen, Wrench, Edit } from 'lucide-react'
 import { supabase } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/auth-context'
 
-// Cost code categories
+// Cost code categories with display format "201 - Demo"
 const COST_CATEGORIES = [
-  { label: "Demo (201)", code: "201" },
-  { label: "Framing (305)", code: "305" },
-  { label: "Plumbing (404)", code: "404" },
-  { label: "Electrical (405)", code: "405" },
-  { label: "HVAC (402)", code: "402" },
-  { label: "Windows (520)", code: "520" },
-  { label: "Doors (530)", code: "530" },
-  { label: "Cabinets (640)", code: "640" },
-  { label: "Countertops (641)", code: "641" },
-  { label: "Tile (950)", code: "950" },
-  { label: "Flooring (960)", code: "960" },
-  { label: "Paint (990)", code: "990" },
-  { label: "Other (999)", code: "999" }
+  { label: "201 - Demo", code: "201" },
+  { label: "305 - Framing", code: "305" },
+  { label: "404 - Plumbing", code: "404" },
+  { label: "405 - Electrical", code: "405" },
+  { label: "402 - HVAC", code: "402" },
+  { label: "520 - Windows", code: "520" },
+  { label: "530 - Doors", code: "530" },
+  { label: "640 - Cabinets", code: "640" },
+  { label: "641 - Countertops", code: "641" },
+  { label: "950 - Tile", code: "950" },
+  { label: "960 - Flooring", code: "960" },
+  { label: "990 - Paint", code: "990" },
+  { label: "999 - Other", code: "999" }
 ]
+
+// Unit options
+const UNIT_OPTIONS = ['EA', 'SF', 'LF', 'SQ', 'ROOM']
 
 // Room options
 const ROOM_OPTIONS = [
@@ -48,9 +51,16 @@ interface LineItem {
   description: string
   category: string
   cost_code: string
+  quantity: number
+  unit: string
   labor_cost: number
+  material_cost?: number
+  overhead_cost?: number
+  direct_cost?: number
   margin_percent: number
   client_price: number
+  pricing_source?: 'task_library' | 'user_library' | 'manual' | null
+  confidence?: number | null
 }
 
 interface EstimateData {
@@ -82,6 +92,8 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
   const [proposalUrl, setProposalUrl] = useState<string | null>(null)
   const [blockedActionMessage, setBlockedActionMessage] = useState<string | null>(null)
   const { user } = useAuth()
+  const saveTimeoutRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
+  const itemsRef = useRef<LineItem[]>([])
 
   // Load line items from database on mount
   useEffect(() => {
@@ -120,9 +132,16 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
               description: item.description || '',
               category: item.category || COST_CATEGORIES.find(c => c.code === item.cost_code)?.label || 'Other (999)',
               cost_code: item.cost_code || '999',
+              quantity: item.quantity || 1,
+              unit: item.unit || 'EA',
               labor_cost: item.labor_cost || 0,
+              material_cost: item.material_cost || 0,
+              overhead_cost: item.overhead_cost || 0,
+              direct_cost: item.direct_cost || 0,
               margin_percent: item.margin_percent || 30,
-              client_price: item.client_price || 0
+              client_price: item.client_price || 0,
+              pricing_source: item.pricing_source || null,
+              confidence: item.confidence ?? null
             })))
           } else if (initialData?.items) {
             // Fallback to initialData
@@ -132,9 +151,16 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
               description: item.description || '',
               category: item.category || 'Other (999)',
               cost_code: '999',
+              quantity: (item as any).quantity || 1,
+              unit: (item as any).unit || 'EA',
               labor_cost: (item as any).labor_cost || 0,
+              material_cost: (item as any).material_cost || 0,
+              overhead_cost: (item as any).overhead_cost || 0,
+              direct_cost: (item as any).direct_cost || 0,
               margin_percent: (item as any).margin_percent || 30,
-              client_price: (item as any).client_price || 0
+              client_price: (item as any).client_price || 0,
+              pricing_source: (item as any).pricing_source || null,
+              confidence: (item as any).confidence ?? null
             })))
           }
         } catch (err) {
@@ -148,9 +174,16 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           description: item.description || '',
           category: item.category || 'Other (999)',
           cost_code: '999',
+          quantity: (item as any).quantity || 1,
+          unit: (item as any).unit || 'EA',
           labor_cost: (item as any).labor_cost || 0,
+          material_cost: (item as any).material_cost || 0,
+          overhead_cost: (item as any).overhead_cost || 0,
+          direct_cost: (item as any).direct_cost || 0,
           margin_percent: (item as any).margin_percent || 30,
-          client_price: (item as any).client_price || 0
+          client_price: (item as any).client_price || 0,
+          pricing_source: (item as any).pricing_source || null,
+          confidence: (item as any).confidence ?? null
         })))
       }
     }
@@ -165,8 +198,102 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     }
   }, [initialData])
 
-  // Auto-calculate client_price when labor_cost or margin_percent changes
-  const updateItem = (index: number, updates: Partial<LineItem>) => {
+  // Keep itemsRef in sync with items state
+  useEffect(() => {
+    itemsRef.current = items
+  }, [items])
+
+  // Save individual line item to database (debounced)
+  const saveLineItem = async (itemId: string | undefined, item: LineItem) => {
+    if (!itemId || !estimateId || !projectId) return
+
+    // Clear existing timeout for this item
+    const existingTimeout = saveTimeoutRef.current.get(itemId)
+    if (existingTimeout) {
+      clearTimeout(existingTimeout)
+    }
+
+    // Set new timeout for debounced save
+    const timeout = setTimeout(async () => {
+      try {
+        const updateData: any = {
+          room_name: item.room_name || null,
+          description: item.description || null,
+          category: item.category || null,
+          cost_code: item.cost_code || null,
+          quantity: item.quantity || 1,
+          unit: item.unit || 'EA',
+          labor_cost: item.labor_cost || 0,
+          material_cost: item.material_cost || 0,
+          overhead_cost: item.overhead_cost || 0,
+          direct_cost: item.direct_cost || 0,
+          margin_percent: item.margin_percent || 30,
+          client_price: item.client_price || 0,
+          pricing_source: item.pricing_source || null,
+          confidence: item.confidence ?? null
+        }
+
+        const { error } = await supabase
+          .from('estimate_line_items')
+          .update(updateData)
+          .eq('id', itemId)
+
+        if (error) {
+          console.error(`Error saving line item ${itemId}:`, error)
+        }
+      } catch (err) {
+        console.error(`Error in saveLineItem for ${itemId}:`, err)
+      } finally {
+        saveTimeoutRef.current.delete(itemId)
+      }
+    }, 1000) // 1 second debounce
+
+    saveTimeoutRef.current.set(itemId, timeout)
+  }
+
+  // Recalculate pricing when margin changes
+  const recalculateMargin = async (itemId: string, margin: number) => {
+    if (!itemId) return
+
+    try {
+      const response = await fetch(`/api/pricing/recalculate/${itemId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ margin }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        console.error('Error recalculating margin:', errorData)
+        return
+      }
+
+      const result = await response.json()
+
+      // Update the item in state with new values
+      setItems(prevItems => {
+        const newItems = [...prevItems]
+        const index = newItems.findIndex(item => item.id === itemId)
+        if (index !== -1) {
+          newItems[index] = {
+            ...newItems[index],
+            margin_percent: result.margin_percent,
+            overhead_cost: result.overhead_cost,
+            direct_cost: result.direct_cost,
+            client_price: result.client_price
+          }
+        }
+        return newItems
+      })
+    } catch (err) {
+      console.error('Error in recalculateMargin:', err)
+    }
+  }
+
+  // Auto-calculate client_price when labor_cost, margin_percent, quantity, or unit changes
+  const updateItem = (index: number, updates: Partial<LineItem>, immediateSave = false) => {
     setItems(prevItems => {
       const newItems = [...prevItems]
       const item = { ...newItems[index] }
@@ -174,14 +301,37 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       // Apply updates
       Object.assign(item, updates)
       
-      // Auto-calculate client_price if labor_cost or margin_percent changed
-      if (updates.labor_cost !== undefined || updates.margin_percent !== undefined) {
+      // Auto-calculate client_price if labor_cost, margin_percent, quantity, or unit changed
+      if (updates.labor_cost !== undefined || updates.margin_percent !== undefined || 
+          updates.quantity !== undefined || updates.unit !== undefined) {
         const laborCost = updates.labor_cost !== undefined ? updates.labor_cost : item.labor_cost
         const marginPercent = updates.margin_percent !== undefined ? updates.margin_percent : item.margin_percent
-        item.client_price = Number(laborCost) * (1 + Number(marginPercent) / 100)
+        const quantity = updates.quantity !== undefined ? updates.quantity : (item.quantity || 1)
+        
+        // Calculate: client_price = (labor_cost * quantity) * (1 + margin/100)
+        item.client_price = Number(laborCost) * Number(quantity) * (1 + Number(marginPercent) / 100)
       }
       
       newItems[index] = item
+      
+      // Update ref with latest items
+      itemsRef.current = newItems
+      
+      // Trigger save (debounced unless immediate)
+      if (item.id) {
+        if (immediateSave) {
+          // Clear existing timeout and save immediately
+          const existingTimeout = saveTimeoutRef.current.get(item.id)
+          if (existingTimeout) {
+            clearTimeout(existingTimeout)
+            saveTimeoutRef.current.delete(item.id)
+          }
+          saveLineItem(item.id, item)
+        } else {
+          saveLineItem(item.id, item)
+        }
+      }
+      
       return newItems
     })
   }
@@ -192,11 +342,18 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       {
         room_name: '',
         description: '',
-        category: 'Other (999)',
+        category: '999 - Other',
         cost_code: '999',
+        quantity: 1,
+        unit: 'EA',
         labor_cost: 0,
+        material_cost: 0,
+        overhead_cost: 0,
+        direct_cost: 0,
         margin_percent: 30,
-        client_price: 0
+        client_price: 0,
+        pricing_source: 'manual' as const,
+        confidence: null
       }
     ])
   }
@@ -208,7 +365,17 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
   const grandTotal = items.reduce((sum, item) => sum + (item.client_price || 0), 0)
 
   // Auto-expanding textarea component
-  const AutoExpandingTextarea = ({ value, onChange, placeholder }: { value: string, onChange: (value: string) => void, placeholder?: string }) => {
+  const AutoExpandingTextarea = ({ 
+    value, 
+    onChange, 
+    onBlur,
+    placeholder 
+  }: { 
+    value: string
+    onChange: (value: string) => void
+    onBlur?: () => void
+    placeholder?: string 
+  }) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null)
 
     const handleInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
@@ -231,6 +398,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onInput={handleInput}
+        onBlur={onBlur}
         placeholder={placeholder}
         className="w-full px-3 py-2 border rounded resize-none overflow-hidden min-h-[40px]"
         rows={1}
@@ -320,9 +488,16 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           description: item.description || null,
           category: categoryInfo.label,
           cost_code: item.cost_code,
+          quantity: item.quantity || 1,
+          unit: item.unit || 'EA',
           labor_cost: item.labor_cost || 0,
+          material_cost: item.material_cost || 0,
+          overhead_cost: item.overhead_cost || 0,
+          direct_cost: item.direct_cost || 0,
           margin_percent: item.margin_percent || 30,
-          client_price: item.client_price || 0
+          client_price: item.client_price || 0,
+          pricing_source: item.pricing_source || null,
+          confidence: item.confidence ?? null
         }
       })
 
@@ -563,11 +738,18 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                   <TableRow>
                     <TableHead>Room</TableHead>
                     <TableHead>Description</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Labor Cost</TableHead>
+                    <TableHead>Cost Code</TableHead>
+                    <TableHead>Quantity</TableHead>
+                    <TableHead>Unit</TableHead>
+                    <TableHead>Labor</TableHead>
+                    <TableHead>Materials</TableHead>
+                    <TableHead>OH</TableHead>
+                    <TableHead>Direct</TableHead>
                     <TableHead>Margin %</TableHead>
                     <TableHead>Client Price</TableHead>
-                    <TableHead className="w-12"></TableHead>
+                    <TableHead>Source</TableHead>
+                    <TableHead>Conf.</TableHead>
+                    <TableHead className="w-12">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -580,7 +762,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                       <React.Fragment key={costCode}>
                         {/* Trade Header Row */}
                         <TableRow className="bg-muted/50">
-                          <TableCell colSpan={7} className="font-bold text-base py-3">
+                          <TableCell colSpan={14} className="font-bold text-base py-3">
                             {costCode} {tradeLabel.replace(`(${costCode})`, '').trim()}
                           </TableCell>
                         </TableRow>
@@ -593,7 +775,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                               {/* Room Subheader Row */}
                               {roomName && roomName !== 'General' && (
                                 <TableRow className="bg-muted/30">
-                                  <TableCell colSpan={7} className="font-semibold text-sm py-2 pl-8">
+                                  <TableCell colSpan={14} className="font-semibold text-sm py-2 pl-8">
                                     {roomName}
                                   </TableCell>
                                 </TableRow>
@@ -634,6 +816,11 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                             placeholder="Enter room name"
                                             value={item.room_name || ''}
                                             onChange={(e) => updateItem(globalIndex, { room_name: e.target.value })}
+                                            onBlur={() => {
+                                              if (item.id) {
+                                                saveLineItem(item.id, items[globalIndex])
+                                              }
+                                            }}
                                           />
                                         )}
                                       </div>
@@ -642,6 +829,12 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                       <AutoExpandingTextarea
                                         value={item.description}
                                         onChange={(value) => updateItem(globalIndex, { description: value })}
+                                        onBlur={() => {
+                                          const currentItem = itemsRef.current[globalIndex]
+                                          if (currentItem?.id) {
+                                            updateItem(globalIndex, {}, true)
+                                          }
+                                        }}
                                         placeholder="Item description"
                                       />
                                     </TableCell>
@@ -652,7 +845,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                           const selected = COST_CATEGORIES.find(c => c.code === value)
                                           updateItem(globalIndex, {
                                             cost_code: selected?.code || '999',
-                                            category: selected?.label || 'Other (999)'
+                                            category: selected?.label || '999 - Other'
                                           })
                                         }}
                                       >
@@ -669,16 +862,59 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                     <TableCell>
                                       <Input
                                         type="number"
-                                        value={item.labor_cost || ''}
+                                        value={item.quantity || 1}
                                         onChange={(e) => {
-                                          const labor = Number(e.target.value) || 0
-                                          updateItem(globalIndex, { labor_cost: labor })
+                                          const qty = Number(e.target.value) || 1
+                                          updateItem(globalIndex, { quantity: qty })
                                         }}
-                                        className="w-24"
+                                        onBlur={() => {
+                                          const currentItem = itemsRef.current[globalIndex]
+                                          if (currentItem?.id) {
+                                            updateItem(globalIndex, {}, true)
+                                          }
+                                        }}
+                                        className="min-w-[100px]"
                                         min="0"
                                         step="0.01"
-                                        placeholder="0.00"
+                                        placeholder="1"
                                       />
+                                    </TableCell>
+                                    <TableCell>
+                                      <Select
+                                        value={item.unit || 'EA'}
+                                        onValueChange={(value) => {
+                                          updateItem(globalIndex, { unit: value })
+                                        }}
+                                      >
+                                        <SelectTrigger className="w-[100px]">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {UNIT_OPTIONS.map(unit => (
+                                            <SelectItem key={unit} value={unit}>{unit}</SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                    </TableCell>
+                                    <TableCell>
+                                      <div className="font-medium min-w-[80px]">
+                                        ${(item.labor_cost || 0).toFixed(2)}
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      <div className="font-medium min-w-[80px]">
+                                        ${(item.material_cost || 0).toFixed(2)}
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      <div className="font-medium min-w-[60px]">
+                                        ${(item.overhead_cost || 0).toFixed(2)}
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      <div className="font-medium min-w-[80px]">
+                                        ${(item.direct_cost || 0).toFixed(2)}
+                                      </div>
                                     </TableCell>
                                     <TableCell>
                                       <div className="flex items-center gap-2 min-w-[120px]">
@@ -690,6 +926,10 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                           onChange={(e) => {
                                             const margin = Number(e.target.value)
                                             updateItem(globalIndex, { margin_percent: margin })
+                                            // Trigger recalculation
+                                            if (item.id) {
+                                              recalculateMargin(item.id, margin)
+                                            }
                                           }}
                                           className="flex-1"
                                         />
@@ -703,13 +943,83 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                             const margin = Number(e.target.value) || 0
                                             updateItem(globalIndex, { margin_percent: margin })
                                           }}
+                                          onBlur={() => {
+                                            const currentItem = itemsRef.current[globalIndex]
+                                            if (currentItem?.id) {
+                                              recalculateMargin(currentItem.id, currentItem.margin_percent || 30)
+                                            }
+                                          }}
                                         />
                                       </div>
                                     </TableCell>
                                     <TableCell>
-                                      <div className="font-medium min-w-[100px]">
-                                        ${(item.client_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      <div className="font-medium min-w-[100px] text-green-700">
+                                        ${(item.client_price || 0).toFixed(2)}
                                       </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      <div className="flex items-center gap-1.5 min-w-[100px]">
+                                        {item.pricing_source === 'task_library' && (
+                                          <span 
+                                            className="flex items-center gap-1 text-sm text-blue-600"
+                                            title="System price from task library"
+                                          >
+                                            <BookOpen className="h-3.5 w-3.5" />
+                                            System
+                                          </span>
+                                        )}
+                                        {item.pricing_source === 'user_library' && (
+                                          <span 
+                                            className="flex items-center gap-1 text-sm text-green-600"
+                                            title="Your custom price override"
+                                          >
+                                            <Wrench className="h-3.5 w-3.5" />
+                                            My Price
+                                          </span>
+                                        )}
+                                        {(item.pricing_source === 'manual' || !item.pricing_source) && (
+                                          <span 
+                                            className="flex items-center gap-1 text-sm text-gray-500"
+                                            title="Manual entry"
+                                          >
+                                            <Edit className="h-3.5 w-3.5" />
+                                            Manual
+                                          </span>
+                                        )}
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      {item.confidence !== null && item.confidence !== undefined ? (
+                                        <div className="flex items-center gap-1.5 min-w-[70px]">
+                                          {item.confidence >= 80 ? (
+                                            <span 
+                                              className="flex items-center gap-1 text-sm text-green-600"
+                                              title={`Match confidence: ${item.confidence}%`}
+                                            >
+                                              <span className="text-green-500">●</span>
+                                              {item.confidence}%
+                                            </span>
+                                          ) : item.confidence >= 50 ? (
+                                            <span 
+                                              className="flex items-center gap-1 text-sm text-yellow-600"
+                                              title={`Match confidence: ${item.confidence}%`}
+                                            >
+                                              <span className="text-yellow-500">●</span>
+                                              {item.confidence}%
+                                            </span>
+                                          ) : (
+                                            <span 
+                                              className="flex items-center gap-1 text-sm text-red-600"
+                                              title={`Match confidence: ${item.confidence}%`}
+                                            >
+                                              <span className="text-red-500">●</span>
+                                              {item.confidence}%
+                                            </span>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <span className="text-sm text-muted-foreground">—</span>
+                                      )}
                                     </TableCell>
                                     <TableCell>
                                       <Button
