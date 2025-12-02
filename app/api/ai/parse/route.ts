@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
           category: item.category || 'Other',
           description: item.description || '',
           cost_code: item.cost_code || '999',
-          room_name: item.room || 'General',
+          room_name: item.room || null, // Preserve AI-detected room, use null if not detected
           labor_cost: item.labor_cost ?? null,
           margin_percent: item.margin_percent ?? null,
           client_price: item.client_price ?? null,
@@ -146,7 +146,7 @@ export async function POST(req: NextRequest) {
         category: 'Other',
         description: '',
         cost_code: '999',
-        room_name: 'General',
+        room_name: null, // No default room - let user select
         labor_cost: null,
         margin_percent: null,
         client_price: null,

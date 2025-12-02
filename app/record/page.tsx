@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Sparkles, Mic } from "lucide-react"
 import { supabase } from "@/lib/supabase/client"
+import { useSidebar } from "@/lib/sidebar-context"
 
 interface EstimateData {
   items: Array<{
@@ -44,6 +45,7 @@ const STORAGE_KEY = 'estimatix:project-intake'
 export default function RecordPage() {
   const router = useRouter()
   const { user } = useAuth()
+  const { sidebarWidth, isCollapsed } = useSidebar()
   const [currentStep, setCurrentStep] = useState<'record' | 'parse' | 'estimate'>('record')
   const [transcript, setTranscript] = useState('')
   const [estimateData, setEstimateData] = useState<EstimateData | null>(null)
@@ -242,7 +244,10 @@ export default function RecordPage() {
       <AuthGuard>
         <div className="flex min-h-screen">
           <Sidebar />
-          <div className="flex-1 md:ml-64 flex items-center justify-center p-6">
+          <div 
+            className="flex-1 flex items-center justify-center p-6 transition-all duration-200"
+            style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
+          >
             <Card className="max-w-xl w-full">
               <CardHeader>
                 <CardTitle>Project details required</CardTitle>
@@ -267,7 +272,10 @@ export default function RecordPage() {
       <div className="flex min-h-screen">
         <Sidebar />
 
-        <div className="flex-1 md:ml-64">
+        <div 
+          className="flex-1 transition-all duration-200"
+          style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
+        >
           {/* Top Bar */}
           <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="flex h-16 items-center justify-between px-4 md:px-6">

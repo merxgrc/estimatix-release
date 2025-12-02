@@ -17,3 +17,4 @@ WITH (m=16, ef_construction=64);
 -- Add comment
 COMMENT ON COLUMN task_library.embedding IS 'OpenAI text-embedding-3-large embedding vector (1536 dimensions)';
 
+

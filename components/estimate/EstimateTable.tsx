@@ -8,9 +8,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Save, AlertTriangle, Plus, Trash2, FileText, Download, BookOpen, Wrench, Edit } from 'lucide-react'
+import { Save, AlertTriangle, Plus, Trash2, FileText, Download, BookOpen, Wrench, Edit, RotateCcw } from 'lucide-react'
 import { supabase } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/auth-context'
+import { SmartRoomInput } from './SmartRoomInput'
 
 // Cost code categories with display format "201 - Demo"
 const COST_CATEGORIES = [
@@ -94,6 +95,8 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
   const { user } = useAuth()
   const saveTimeoutRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
   const itemsRef = useRef<LineItem[]>([])
+  // Track original AI values for reset functionality
+  const originalValuesRef = useRef<Map<string, Partial<LineItem>>>(new Map())
 
   // Load line items from database on mount
   useEffect(() => {
@@ -108,11 +111,11 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
 
           if (error) {
             console.error('Error loading line items:', error)
-            // Fallback to initialData if database load fails
+            // Fallback to initialData if database load fails - preserve room_name
             if (initialData?.items) {
               setItems(initialData.items.map((item, idx) => ({
                 id: `temp-${idx}`,
-                room_name: '',
+                room_name: (item as any).room_name || '', // Preserve room_name from initialData
                 description: item.description || '',
                 category: item.category || 'Other (999)',
                 cost_code: '999',
@@ -125,10 +128,10 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           }
 
           if (data && data.length > 0) {
-            // Load from database
-            setItems(data.map(item => ({
+            // Load from database - preserve room_name from database
+            const loadedItems = data.map(item => ({
               id: item.id,
-              room_name: item.room_name || '',
+              room_name: item.room_name || '', // Preserve room_name from database
               description: item.description || '',
               category: item.category || COST_CATEGORIES.find(c => c.code === item.cost_code)?.label || 'Other (999)',
               cost_code: item.cost_code || '999',
@@ -142,12 +145,28 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
               client_price: item.client_price || 0,
               pricing_source: item.pricing_source || null,
               confidence: item.confidence ?? null
-            })))
+            }))
+            setItems(loadedItems)
+            
+            // Store original values for reset functionality (only if from AI pricing)
+            loadedItems.forEach(item => {
+              if (item.id && (item.pricing_source === 'task_library' || item.pricing_source === 'user_library')) {
+                originalValuesRef.current.set(item.id, {
+                  labor_cost: item.labor_cost,
+                  material_cost: item.material_cost,
+                  overhead_cost: item.overhead_cost,
+                  direct_cost: item.direct_cost,
+                  margin_percent: item.margin_percent,
+                  client_price: item.client_price,
+                  pricing_source: item.pricing_source
+                } as Partial<LineItem>)
+              }
+            })
           } else if (initialData?.items) {
-            // Fallback to initialData
+            // Fallback to initialData - preserve room_name from initialData
             setItems(initialData.items.map((item, idx) => ({
               id: `temp-${idx}`,
-              room_name: '',
+              room_name: (item as any).room_name || '', // Preserve room_name from initialData
               description: item.description || '',
               category: item.category || 'Other (999)',
               cost_code: '999',
@@ -167,10 +186,10 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           console.error('Error in loadLineItems:', err)
         }
       } else if (initialData?.items) {
-        // Use initialData if no estimateId
+        // Use initialData if no estimateId - preserve room_name from initialData
         setItems(initialData.items.map((item, idx) => ({
           id: `temp-${idx}`,
-          room_name: '',
+          room_name: (item as any).room_name || '', // Preserve room_name from initialData
           description: item.description || '',
           category: item.category || 'Other (999)',
           cost_code: '999',
@@ -229,7 +248,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           direct_cost: item.direct_cost || 0,
           margin_percent: item.margin_percent || 30,
           client_price: item.client_price || 0,
-          pricing_source: item.pricing_source || null,
+          pricing_source: item.pricing_source || null, // Preserve existing source (manual if user edited, otherwise original)
           confidence: item.confidence ?? null
         }
 
@@ -292,6 +311,48 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     }
   }
 
+  // Validate numeric input (0-1M)
+  const validateNumeric = (value: string): number => {
+    const num = parseFloat(value) || 0
+    if (num < 0) return 0
+    if (num > 1000000) return 1000000
+    return num
+  }
+
+  // Reset cost fields to original AI values
+  const resetToAI = (itemId: string, globalIndex: number) => {
+    const original = originalValuesRef.current.get(itemId)
+    if (!original) return
+
+    setItems(prevItems => {
+      const newItems = [...prevItems]
+      const item = { ...newItems[globalIndex] }
+      
+      // Restore original values
+      if (original.labor_cost !== undefined) item.labor_cost = original.labor_cost as number
+      if (original.material_cost !== undefined) item.material_cost = original.material_cost as number
+      if (original.overhead_cost !== undefined) item.overhead_cost = original.overhead_cost as number
+      if (original.direct_cost !== undefined) item.direct_cost = original.direct_cost as number
+      if (original.margin_percent !== undefined) item.margin_percent = original.margin_percent as number
+      if (original.client_price !== undefined) item.client_price = original.client_price as number
+      
+      // Restore pricing_source if it was from AI
+      if (original.pricing_source) {
+        item.pricing_source = original.pricing_source as 'task_library' | 'user_library' | 'manual'
+      }
+      
+      newItems[globalIndex] = item
+      itemsRef.current = newItems
+      
+      // Save immediately
+      if (item.id) {
+        saveLineItem(item.id, item)
+      }
+      
+      return newItems
+    })
+  }
+
   // Auto-calculate client_price when labor_cost, margin_percent, quantity, or unit changes
   const updateItem = (index: number, updates: Partial<LineItem>, immediateSave = false) => {
     setItems(prevItems => {
@@ -301,9 +362,18 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       // Apply updates
       Object.assign(item, updates)
       
+      // Mark as manual if user edits cost fields
+      if (updates.labor_cost !== undefined || updates.material_cost !== undefined || 
+          updates.overhead_cost !== undefined || updates.direct_cost !== undefined || 
+          updates.client_price !== undefined) {
+        item.pricing_source = 'manual'
+      }
+      
       // Auto-calculate client_price if labor_cost, margin_percent, quantity, or unit changed
-      if (updates.labor_cost !== undefined || updates.margin_percent !== undefined || 
-          updates.quantity !== undefined || updates.unit !== undefined) {
+      // But only if client_price wasn't manually edited and item is not manually overridden
+      if ((updates.labor_cost !== undefined || updates.margin_percent !== undefined || 
+          updates.quantity !== undefined || updates.unit !== undefined) &&
+          updates.client_price === undefined && item.pricing_source !== 'manual') {
         const laborCost = updates.labor_cost !== undefined ? updates.labor_cost : item.labor_cost
         const marginPercent = updates.margin_percent !== undefined ? updates.margin_percent : item.margin_percent
         const quantity = updates.quantity !== undefined ? updates.quantity : (item.quantity || 1)
@@ -377,31 +447,58 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     placeholder?: string 
   }) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null)
+    // Use internal state to prevent re-render issues on every keystroke
+    const [internalValue, setInternalValue] = useState(value)
+    const isFocusedRef = useRef(false)
 
-    const handleInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
+    // Sync internal value when prop value changes (but only if textarea is not focused)
+    useEffect(() => {
+      if (!isFocusedRef.current && value !== internalValue) {
+        setInternalValue(value)
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [value])
+
+    const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const newValue = e.target.value
+      setInternalValue(newValue)
+      // Auto-expand height
       const textarea = e.currentTarget
       textarea.style.height = 'auto'
       textarea.style.height = textarea.scrollHeight + 'px'
-      onChange(textarea.value)
     }
 
+    const handleFocus = () => {
+      isFocusedRef.current = true
+    }
+
+    const handleBlur = () => {
+      isFocusedRef.current = false
+      // Only update parent state on blur
+      if (internalValue !== value) {
+        onChange(internalValue)
+      }
+      onBlur?.()
+    }
+
+    // Auto-expand on mount and when value changes externally
     useEffect(() => {
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'
         textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px'
       }
-    }, [value])
+    }, [internalValue])
 
     return (
       <textarea
         ref={textareaRef}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onInput={handleInput}
-        onBlur={onBlur}
+        value={internalValue}
+        onChange={handleChange}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
         placeholder={placeholder}
-        className="w-full px-3 py-2 border rounded resize-none overflow-hidden min-h-[40px]"
-        rows={1}
+        className="w-full px-3 py-2 border rounded resize-none overflow-hidden min-h-[120px]"
+        rows={3}
       />
     )
   }
@@ -737,16 +834,14 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                 <TableHeader>
                   <TableRow>
                     <TableHead>Room</TableHead>
-                    <TableHead>Description</TableHead>
                     <TableHead>Cost Code</TableHead>
-                    <TableHead>Quantity</TableHead>
-                    <TableHead>Unit</TableHead>
-                    <TableHead>Labor</TableHead>
-                    <TableHead>Materials</TableHead>
-                    <TableHead>OH</TableHead>
-                    <TableHead>Direct</TableHead>
-                    <TableHead>Margin %</TableHead>
-                    <TableHead>Client Price</TableHead>
+                    <TableHead>Qty / Unit</TableHead>
+                    <TableHead className="text-right">Labor</TableHead>
+                    <TableHead className="text-right">Materials</TableHead>
+                    <TableHead className="text-right">OH</TableHead>
+                    <TableHead className="text-right">Direct</TableHead>
+                    <TableHead className="text-right">Margin %</TableHead>
+                    <TableHead className="text-right">Client Price</TableHead>
                     <TableHead>Source</TableHead>
                     <TableHead>Conf.</TableHead>
                     <TableHead className="w-12">Actions</TableHead>
@@ -756,14 +851,18 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                   {sortedCostCodes.map((costCode) => {
                     const costInfo = COST_CATEGORIES.find(c => c.code === costCode)
                     const tradeLabel = costInfo?.label || `Other (${costCode})`
+                    // Extract just the trade name (remove "201 - " prefix)
+                    const tradeName = tradeLabel.includes(' - ') 
+                      ? tradeLabel.split(' - ')[1] 
+                      : tradeLabel.replace(`(${costCode})`, '').trim()
                     const rooms = Object.keys(groupedItems[costCode]).sort()
                     
                     return (
                       <React.Fragment key={costCode}>
                         {/* Trade Header Row */}
                         <TableRow className="bg-muted/50">
-                          <TableCell colSpan={14} className="font-bold text-base py-3">
-                            {costCode} {tradeLabel.replace(`(${costCode})`, '').trim()}
+                          <TableCell colSpan={12} className="font-bold text-base py-3">
+                            {tradeName}
                           </TableCell>
                         </TableRow>
                         
@@ -775,7 +874,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                               {/* Room Subheader Row */}
                               {roomName && roomName !== 'General' && (
                                 <TableRow className="bg-muted/30">
-                                  <TableCell colSpan={14} className="font-semibold text-sm py-2 pl-8">
+                                  <TableCell colSpan={12} className="font-semibold text-sm py-2 pl-8">
                                     {roomName}
                                   </TableCell>
                                 </TableRow>
@@ -784,254 +883,337 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                               {/* Items for this room */}
                               {roomItems.map((item, roomItemIndex) => {
                                 const globalIndex = item._originalIndex
-                                const isCustomRoom = item.room_name && !ROOM_OPTIONS.includes(item.room_name)
                                 
                                 return (
-                                  <TableRow key={item.id || `${costCode}-${roomName}-${roomItemIndex}`}>
-                                    <TableCell>
-                                      <div className="flex flex-col gap-1 min-w-[150px]">
-                                        <Select
-                                          value={isCustomRoom ? '__custom__' : (item.room_name || '__custom__')}
-                                          onValueChange={(value) => {
-                                            if (value === '__custom__') {
-                                              updateItem(globalIndex, { room_name: '' })
-                                            } else {
-                                              updateItem(globalIndex, { room_name: value })
-                                            }
-                                          }}
-                                        >
-                                          <SelectTrigger className="w-full">
-                                            <SelectValue placeholder="Select room" />
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            <SelectItem value="__custom__">Other / Custom</SelectItem>
-                                            {ROOM_OPTIONS.map(room => (
-                                              <SelectItem key={room} value={room}>{room}</SelectItem>
-                                            ))}
-                                          </SelectContent>
-                                        </Select>
-                                        {(!item.room_name || (item.room_name && !ROOM_OPTIONS.includes(item.room_name))) && (
-                                          <Input
-                                            className="w-full"
-                                            placeholder="Enter room name"
+                                  <React.Fragment key={item.id || `${costCode}-${roomName}-${roomItemIndex}`}>
+                                    {/* Main row: Room, Cost Code, Qty/Unit, Pricing Grid, Source, Conf, Actions */}
+                                    <TableRow>
+                                      <TableCell className="align-top">
+                                        <div className="min-w-[150px]">
+                                          <SmartRoomInput
                                             value={item.room_name || ''}
-                                            onChange={(e) => updateItem(globalIndex, { room_name: e.target.value })}
+                                            onChange={(value) => updateItem(globalIndex, { room_name: value })}
                                             onBlur={() => {
                                               if (item.id) {
                                                 saveLineItem(item.id, items[globalIndex])
                                               }
                                             }}
+                                            placeholder="Select or type room name"
+                                            options={ROOM_OPTIONS}
                                           />
-                                        )}
-                                      </div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <AutoExpandingTextarea
-                                        value={item.description}
-                                        onChange={(value) => updateItem(globalIndex, { description: value })}
-                                        onBlur={() => {
-                                          const currentItem = itemsRef.current[globalIndex]
-                                          if (currentItem?.id) {
-                                            updateItem(globalIndex, {}, true)
-                                          }
-                                        }}
-                                        placeholder="Item description"
-                                      />
-                                    </TableCell>
-                                    <TableCell>
-                                      <Select
-                                        value={item.cost_code}
-                                        onValueChange={(value) => {
-                                          const selected = COST_CATEGORIES.find(c => c.code === value)
-                                          updateItem(globalIndex, {
-                                            cost_code: selected?.code || '999',
-                                            category: selected?.label || '999 - Other'
-                                          })
-                                        }}
-                                      >
-                                        <SelectTrigger className="w-[150px]">
-                                          <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          {COST_CATEGORIES.map(({ label, code }) => (
-                                            <SelectItem key={code} value={code}>{label}</SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
-                                    </TableCell>
-                                    <TableCell>
-                                      <Input
-                                        type="number"
-                                        value={item.quantity || 1}
-                                        onChange={(e) => {
-                                          const qty = Number(e.target.value) || 1
-                                          updateItem(globalIndex, { quantity: qty })
-                                        }}
-                                        onBlur={() => {
-                                          const currentItem = itemsRef.current[globalIndex]
-                                          if (currentItem?.id) {
-                                            updateItem(globalIndex, {}, true)
-                                          }
-                                        }}
-                                        className="min-w-[100px]"
-                                        min="0"
-                                        step="0.01"
-                                        placeholder="1"
-                                      />
-                                    </TableCell>
-                                    <TableCell>
-                                      <Select
-                                        value={item.unit || 'EA'}
-                                        onValueChange={(value) => {
-                                          updateItem(globalIndex, { unit: value })
-                                        }}
-                                      >
-                                        <SelectTrigger className="w-[100px]">
-                                          <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          {UNIT_OPTIONS.map(unit => (
-                                            <SelectItem key={unit} value={unit}>{unit}</SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="font-medium min-w-[80px]">
-                                        ${(item.labor_cost || 0).toFixed(2)}
-                                      </div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="font-medium min-w-[80px]">
-                                        ${(item.material_cost || 0).toFixed(2)}
-                                      </div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="font-medium min-w-[60px]">
-                                        ${(item.overhead_cost || 0).toFixed(2)}
-                                      </div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="font-medium min-w-[80px]">
-                                        ${(item.direct_cost || 0).toFixed(2)}
-                                      </div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="flex items-center gap-2 min-w-[120px]">
-                                        <input
-                                          type="range"
-                                          min={0}
-                                          max={60}
-                                          value={item.margin_percent || 30}
-                                          onChange={(e) => {
-                                            const margin = Number(e.target.value)
-                                            updateItem(globalIndex, { margin_percent: margin })
-                                            // Trigger recalculation
-                                            if (item.id) {
-                                              recalculateMargin(item.id, margin)
-                                            }
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <Select
+                                          value={item.cost_code}
+                                          onValueChange={(value) => {
+                                            const selected = COST_CATEGORIES.find(c => c.code === value)
+                                            updateItem(globalIndex, {
+                                              cost_code: selected?.code || '999',
+                                              category: selected?.label || '999 - Other'
+                                            })
                                           }}
-                                          className="flex-1"
-                                        />
-                                        <Input
-                                          type="number"
-                                          value={item.margin_percent || 30}
-                                          min={0}
-                                          max={60}
-                                          className="w-16 border px-2 py-1 rounded"
-                                          onChange={(e) => {
-                                            const margin = Number(e.target.value) || 0
-                                            updateItem(globalIndex, { margin_percent: margin })
-                                          }}
-                                          onBlur={() => {
-                                            const currentItem = itemsRef.current[globalIndex]
-                                            if (currentItem?.id) {
-                                              recalculateMargin(currentItem.id, currentItem.margin_percent || 30)
-                                            }
-                                          }}
-                                        />
-                                      </div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="font-medium min-w-[100px] text-green-700">
-                                        ${(item.client_price || 0).toFixed(2)}
-                                      </div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="flex items-center gap-1.5 min-w-[100px]">
-                                        {item.pricing_source === 'task_library' && (
-                                          <span 
-                                            className="flex items-center gap-1 text-sm text-blue-600"
-                                            title="System price from task library"
+                                        >
+                                          <SelectTrigger className="w-[150px]">
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {COST_CATEGORIES.map(({ label, code }) => (
+                                              <SelectItem key={code} value={code}>{label}</SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <div className="flex items-center gap-2 min-w-[120px]">
+                                          <Input
+                                            type="number"
+                                            value={item.quantity || 1}
+                                            onChange={(e) => {
+                                              const qty = Number(e.target.value) || 1
+                                              updateItem(globalIndex, { quantity: qty })
+                                            }}
+                                            onBlur={() => {
+                                              const currentItem = itemsRef.current[globalIndex]
+                                              if (currentItem?.id) {
+                                                updateItem(globalIndex, {}, true)
+                                              }
+                                            }}
+                                            className="w-20 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                            min="0"
+                                            step="0.01"
+                                            placeholder="1"
+                                          />
+                                          <Select
+                                            value={item.unit || 'EA'}
+                                            onValueChange={(value) => {
+                                              updateItem(globalIndex, { unit: value })
+                                            }}
                                           >
-                                            <BookOpen className="h-3.5 w-3.5" />
-                                            System
-                                          </span>
-                                        )}
-                                        {item.pricing_source === 'user_library' && (
-                                          <span 
-                                            className="flex items-center gap-1 text-sm text-green-600"
-                                            title="Your custom price override"
-                                          >
-                                            <Wrench className="h-3.5 w-3.5" />
-                                            My Price
-                                          </span>
-                                        )}
-                                        {(item.pricing_source === 'manual' || !item.pricing_source) && (
-                                          <span 
-                                            className="flex items-center gap-1 text-sm text-gray-500"
-                                            title="Manual entry"
-                                          >
-                                            <Edit className="h-3.5 w-3.5" />
-                                            Manual
-                                          </span>
-                                        )}
-                                      </div>
-                                    </TableCell>
-                                    <TableCell>
-                                      {item.confidence !== null && item.confidence !== undefined ? (
-                                        <div className="flex items-center gap-1.5 min-w-[70px]">
-                                          {item.confidence >= 80 ? (
+                                            <SelectTrigger className="w-[80px]">
+                                              <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {UNIT_OPTIONS.map(unit => (
+                                                <SelectItem key={unit} value={unit}>{unit}</SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <div className="flex items-center gap-1 min-w-[90px]">
+                                          <span className="text-sm text-muted-foreground">$</span>
+                                          <Input
+                                            type="number"
+                                            value={item.labor_cost || 0}
+                                            onChange={(e) => {
+                                              const value = validateNumeric(e.target.value)
+                                              updateItem(globalIndex, { labor_cost: value })
+                                            }}
+                                            onBlur={() => {
+                                              const currentItem = itemsRef.current[globalIndex]
+                                              if (currentItem?.id) {
+                                                saveLineItem(currentItem.id, currentItem)
+                                              }
+                                            }}
+                                            className="w-20 h-8 text-sm text-right pr-2 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                            min="0"
+                                            max="1000000"
+                                            step="0.01"
+                                          />
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <div className="flex items-center gap-1 min-w-[90px]">
+                                          <span className="text-sm text-muted-foreground">$</span>
+                                          <Input
+                                            type="number"
+                                            value={item.material_cost || 0}
+                                            onChange={(e) => {
+                                              const value = validateNumeric(e.target.value)
+                                              updateItem(globalIndex, { material_cost: value })
+                                            }}
+                                            onBlur={() => {
+                                              const currentItem = itemsRef.current[globalIndex]
+                                              if (currentItem?.id) {
+                                                saveLineItem(currentItem.id, currentItem)
+                                              }
+                                            }}
+                                            className="w-20 h-8 text-sm text-right pr-2 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                            min="0"
+                                            max="1000000"
+                                            step="0.01"
+                                          />
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <div className="flex items-center gap-1 min-w-[80px]">
+                                          <span className="text-sm text-muted-foreground">$</span>
+                                          <Input
+                                            type="number"
+                                            value={item.overhead_cost || 0}
+                                            onChange={(e) => {
+                                              const value = validateNumeric(e.target.value)
+                                              updateItem(globalIndex, { overhead_cost: value })
+                                            }}
+                                            onBlur={() => {
+                                              const currentItem = itemsRef.current[globalIndex]
+                                              if (currentItem?.id) {
+                                                saveLineItem(currentItem.id, currentItem)
+                                              }
+                                            }}
+                                            className="w-20 h-8 text-sm text-right pr-2 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                            min="0"
+                                            max="1000000"
+                                            step="0.01"
+                                          />
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <div className="flex items-center gap-1 min-w-[90px]">
+                                          <span className="text-sm text-muted-foreground">$</span>
+                                          <Input
+                                            type="number"
+                                            value={item.direct_cost || 0}
+                                            onChange={(e) => {
+                                              const value = validateNumeric(e.target.value)
+                                              updateItem(globalIndex, { direct_cost: value })
+                                            }}
+                                            onBlur={() => {
+                                              const currentItem = itemsRef.current[globalIndex]
+                                              if (currentItem?.id) {
+                                                saveLineItem(currentItem.id, currentItem)
+                                              }
+                                            }}
+                                            className="w-20 h-8 text-sm text-right pr-2 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                            min="0"
+                                            max="1000000"
+                                            step="0.01"
+                                          />
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <div className="flex items-center gap-1 min-w-[90px]">
+                                          <Input
+                                            type="number"
+                                            value={item.margin_percent || 30}
+                                            min={0}
+                                            max={60}
+                                            className="w-16 h-8 text-sm px-2 text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                            onChange={(e) => {
+                                              const margin = Number(e.target.value) || 0
+                                              updateItem(globalIndex, { margin_percent: margin })
+                                            }}
+                                            onBlur={() => {
+                                              const currentItem = itemsRef.current[globalIndex]
+                                              if (currentItem?.id) {
+                                                // Only recalculate if not manually overridden
+                                                if (currentItem.pricing_source !== 'manual') {
+                                                  recalculateMargin(currentItem.id, currentItem.margin_percent || 30)
+                                                } else {
+                                                  saveLineItem(currentItem.id, currentItem)
+                                                }
+                                              }
+                                            }}
+                                          />
+                                          <span className="text-xs text-muted-foreground">%</span>
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <div className="flex items-center gap-1 min-w-[100px]">
+                                          <span className="text-sm text-muted-foreground font-semibold text-green-700">$</span>
+                                          <Input
+                                            type="number"
+                                            value={item.client_price || 0}
+                                            onChange={(e) => {
+                                              const value = validateNumeric(e.target.value)
+                                              updateItem(globalIndex, { client_price: value })
+                                            }}
+                                            onBlur={() => {
+                                              const currentItem = itemsRef.current[globalIndex]
+                                              if (currentItem?.id) {
+                                                saveLineItem(currentItem.id, currentItem)
+                                              }
+                                            }}
+                                            className="w-24 h-8 text-sm text-right pr-2 font-semibold text-green-700 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                            min="0"
+                                            max="1000000"
+                                            step="0.01"
+                                          />
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <div className="flex items-center gap-1 min-w-[90px]">
+                                          {item.pricing_source === 'task_library' && (
                                             <span 
-                                              className="flex items-center gap-1 text-sm text-green-600"
-                                              title={`Match confidence: ${item.confidence}%`}
+                                              className="flex items-center gap-1 text-xs text-blue-600"
+                                              title="System price from task library"
                                             >
-                                              <span className="text-green-500">●</span>
-                                              {item.confidence}%
+                                              <BookOpen className="h-3 w-3" />
+                                              System
                                             </span>
-                                          ) : item.confidence >= 50 ? (
+                                          )}
+                                          {item.pricing_source === 'user_library' && (
                                             <span 
-                                              className="flex items-center gap-1 text-sm text-yellow-600"
-                                              title={`Match confidence: ${item.confidence}%`}
+                                              className="flex items-center gap-1 text-xs text-green-600"
+                                              title="Your custom price override"
                                             >
-                                              <span className="text-yellow-500">●</span>
-                                              {item.confidence}%
+                                              <Wrench className="h-3 w-3" />
+                                              My Price
                                             </span>
-                                          ) : (
+                                          )}
+                                          {(item.pricing_source === 'manual' || !item.pricing_source) && (
                                             <span 
-                                              className="flex items-center gap-1 text-sm text-red-600"
-                                              title={`Match confidence: ${item.confidence}%`}
+                                              className="flex items-center gap-1 text-xs text-gray-500"
+                                              title="Manual entry"
                                             >
-                                              <span className="text-red-500">●</span>
-                                              {item.confidence}%
+                                              <Edit className="h-3 w-3" />
+                                              Manual
                                             </span>
                                           )}
                                         </div>
-                                      ) : (
-                                        <span className="text-sm text-muted-foreground">—</span>
-                                      )}
-                                    </TableCell>
-                                    <TableCell>
-                                      <Button
-                                        onClick={() => removeItem(globalIndex)}
-                                        variant="ghost"
-                                        size="sm"
-                                        className="text-red-600 hover:text-red-700"
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                      </Button>
-                                    </TableCell>
-                                  </TableRow>
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        {item.confidence !== null && item.confidence !== undefined ? (
+                                          <div className="flex items-center gap-1 min-w-[60px]">
+                                            {item.confidence >= 80 ? (
+                                              <span 
+                                                className="flex items-center gap-1 text-xs text-green-600"
+                                                title={`Match confidence: ${item.confidence}%`}
+                                              >
+                                                <span className="text-green-500">●</span>
+                                                {item.confidence}%
+                                              </span>
+                                            ) : item.confidence >= 50 ? (
+                                              <span 
+                                                className="flex items-center gap-1 text-xs text-yellow-600"
+                                                title={`Match confidence: ${item.confidence}%`}
+                                              >
+                                                <span className="text-yellow-500">●</span>
+                                                {item.confidence}%
+                                              </span>
+                                            ) : (
+                                              <span 
+                                                className="flex items-center gap-1 text-xs text-red-600"
+                                                title={`Match confidence: ${item.confidence}%`}
+                                              >
+                                                <span className="text-red-500">●</span>
+                                                {item.confidence}%
+                                              </span>
+                                            )}
+                                          </div>
+                                        ) : (
+                                          <span className="text-xs text-gray-400">—</span>
+                                        )}
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <div className="flex items-center gap-1">
+                                          {originalValuesRef.current.has(item.id || '') && item.pricing_source === 'manual' && (
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              className="h-7 px-2 text-xs"
+                                              onClick={() => item.id && resetToAI(item.id, globalIndex)}
+                                              title="Reset all cost fields to AI pricing"
+                                            >
+                                              <RotateCcw className="h-3 w-3 mr-1" />
+                                              Reset
+                                            </Button>
+                                          )}
+                                          <Button
+                                            onClick={() => removeItem(globalIndex)}
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                          >
+                                            <Trash2 className="h-4 w-4" />
+                                          </Button>
+                                        </div>
+                                      </TableCell>
+                                    </TableRow>
+                                    
+                                    {/* Description row - half width, 3x height */}
+                                    <TableRow>
+                                      <TableCell colSpan={6} className="pt-0 pb-3">
+                                        <AutoExpandingTextarea
+                                          value={item.description}
+                                          onChange={(value) => {
+                                            // Update state immediately for controlled component
+                                            updateItem(globalIndex, { description: value }, false)
+                                          }}
+                                          onBlur={() => {
+                                            // Save to Supabase on blur
+                                            const currentItem = itemsRef.current[globalIndex]
+                                            if (currentItem?.id) {
+                                              saveLineItem(currentItem.id, currentItem)
+                                            }
+                                          }}
+                                          placeholder="Item description"
+                                        />
+                                      </TableCell>
+                                    </TableRow>
+                                  </React.Fragment>
                                 )
                               })}
                             </React.Fragment>

@@ -7,15 +7,20 @@ import { Button } from "@/components/ui/button"
 import { LayoutDashboard } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { useSidebar } from "@/lib/sidebar-context"
 
 export default function DashboardPage() {
   const router = useRouter()
+  const { sidebarWidth, isCollapsed } = useSidebar()
 
   return (
     <AuthGuard>
       <div className="flex min-h-screen">
         <Sidebar />
-        <div className="flex-1 md:ml-64 flex items-center justify-center p-6">
+        <div 
+          className="flex-1 flex items-center justify-center p-6 transition-all duration-200"
+          style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
+        >
           <Card className="max-w-xl w-full">
             <CardHeader className="text-center">
               <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-secondary">

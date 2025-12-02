@@ -22,11 +22,13 @@ import { ProposalsTab } from "./_components/ProposalsTab"
 import type { Project, Estimate, Upload, Profile } from "@/types/db"
 import { ArrowLeft, Trash2 } from "lucide-react"
 import { supabase } from "@/lib/supabase/client"
+import { useSidebar } from "@/lib/sidebar-context"
 
 export default function ProjectDetailPage() {
   const router = useRouter()
   const params = useParams()
   const { user } = useAuth()
+  const { sidebarWidth, isCollapsed } = useSidebar()
   const projectId = params.id as string
 
   const [project, setProject] = useState<Project | null>(null)
@@ -519,7 +521,10 @@ export default function ProjectDetailPage() {
       <AuthGuard>
         <div className="flex min-h-screen">
           <Sidebar />
-          <div className="flex-1 md:ml-64 flex items-center justify-center">
+          <div 
+            className="flex-1 flex items-center justify-center transition-all duration-200"
+            style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
+          >
             <div className="text-center">
               <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
               <p className="text-muted-foreground">Loading project...</p>
@@ -535,7 +540,10 @@ export default function ProjectDetailPage() {
       <AuthGuard>
         <div className="flex min-h-screen">
           <Sidebar />
-          <div className="flex-1 md:ml-64 flex items-center justify-center p-6">
+          <div 
+            className="flex-1 flex items-center justify-center p-6 transition-all duration-200"
+            style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
+          >
             <Card className="max-w-xl w-full border-destructive">
               <CardHeader>
                 <CardTitle className="text-destructive">Error Loading Project</CardTitle>
@@ -564,7 +572,10 @@ export default function ProjectDetailPage() {
       <div className="flex min-h-screen">
         <Sidebar />
 
-        <div className="flex-1 md:ml-64">
+        <div 
+          className="flex-1 transition-all duration-200"
+          style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
+        >
           {/* Top Bar */}
           <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="flex h-16 items-center justify-between px-4 md:px-6">
