@@ -89,8 +89,8 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [isGeneratingProposal, setIsGeneratingProposal] = useState(false)
-  const [proposalUrl, setProposalUrl] = useState<string | null>(null)
+  const [isGeneratingSpecSheet, setIsGeneratingSpecSheet] = useState(false)
+  const [specSheetUrl, setSpecSheetUrl] = useState<string | null>(null)
   const [blockedActionMessage, setBlockedActionMessage] = useState<string | null>(null)
   const { user } = useAuth()
   const saveTimeoutRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
@@ -650,7 +650,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     }
   }
 
-  const generateProposal = async () => {
+  const generateSpecSheet = async () => {
     const hasItems = items.length > 0
 
     if (!hasItems) {
@@ -661,32 +661,32 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
 
     const currentEstimateId = estimateId
     if (!currentEstimateId) {
-      setBlockedActionMessage('Please save the estimate first before generating a proposal.')
+      setBlockedActionMessage('Please save the estimate first before generating a spec sheet.')
       setTimeout(() => setBlockedActionMessage(null), 5000)
       return
     }
 
-    setIsGeneratingProposal(true)
+    setIsGeneratingSpecSheet(true)
     setError(null)
-    setProposalUrl(null)
+    setSpecSheetUrl(null)
 
     try {
-      const response = await fetch(`/api/proposals/${currentEstimateId}/pdf`, {
+      const response = await fetch(`/api/spec-sheets/${currentEstimateId}/pdf`, {
         method: 'GET',
       })
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || `Failed to generate proposal: ${response.status}`)
+        throw new Error(errorData.error || `Failed to generate spec sheet: ${response.status}`)
       }
 
       const data = await response.json()
-      setProposalUrl(data.url)
+      setSpecSheetUrl(data.url)
     } catch (err) {
-      console.error('Generate proposal error:', err)
-      setError(err instanceof Error ? err.message : 'Failed to generate proposal')
+      console.error('Generate spec sheet error:', err)
+      setError(err instanceof Error ? err.message : 'Failed to generate spec sheet')
     } finally {
-      setIsGeneratingProposal(false)
+      setIsGeneratingSpecSheet(false)
     }
   }
 
@@ -754,12 +754,12 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                 Add Item
               </Button>
               <Button 
-                onClick={generateProposal} 
-                disabled={isGeneratingProposal}
+                onClick={generateSpecSheet} 
+                disabled={isGeneratingSpecSheet}
                 variant="outline"
                 size="sm"
               >
-                {isGeneratingProposal ? (
+                {isGeneratingSpecSheet ? (
                   <>
                     <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                     Generating...
@@ -767,7 +767,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                 ) : (
                   <>
                     <FileText className="mr-2 h-4 w-4" />
-                    Generate Proposal
+                    Generate Spec Sheet
                   </>
                 )}
               </Button>
@@ -807,12 +807,12 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
             </Alert>
           )}
 
-          {proposalUrl && (
+          {specSheetUrl && (
             <Alert className="mb-4 border-blue-200 bg-blue-50">
               <AlertDescription className="text-blue-800 flex items-center justify-between">
-                <span>✓ Proposal generated successfully!</span>
+                <span>✓ Spec sheet generated successfully!</span>
                 <Button
-                  onClick={() => window.open(proposalUrl, '_blank')}
+                  onClick={() => window.open(specSheetUrl, '_blank')}
                   variant="outline"
                   size="sm"
                   className="ml-4"

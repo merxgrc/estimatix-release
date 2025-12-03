@@ -2,11 +2,11 @@
 
 import type { Project } from "@/types/db"
 
-interface ProposalsTabProps {
+interface SpecSheetsTabProps {
   project: Project
 }
 
-export function ProposalsTab({ project }: ProposalsTabProps) {
+export function SpecSheetsTab({ project }: SpecSheetsTabProps) {
   return (
     <div className="p-6 text-muted-foreground">
       Feature coming soon...

@@ -117,7 +117,7 @@ export default function PricingOnboardingPage() {
   useEffect(() => {
     if (!originalSettings) {
       // If no original settings, enable save if any field is filled
-      const hasAnyValue = region || quality || defaultMargin !== 20 || selectedTrades.length > 0
+      const hasAnyValue = Boolean(region || quality || defaultMargin !== 20 || selectedTrades.length > 0)
       setHasChanges(hasAnyValue)
       return
     }
@@ -132,7 +132,7 @@ export default function PricingOnboardingPage() {
     const changed = 
       originalSettings.region !== currentSettings.region ||
       originalSettings.quality !== currentSettings.quality ||
-      Math.abs((originalSettings.default_margin || 20) - currentSettings.default_margin) > 0.01 ||
+      Math.abs((originalSettings.default_margin || 20) - (currentSettings.default_margin || 20)) > 0.01 ||
       JSON.stringify((originalSettings.main_trades || []).sort()) !== JSON.stringify((currentSettings.main_trades || []).sort())
 
     setHasChanges(changed)

@@ -8,10 +8,10 @@ const OVERHEAD_PERCENT = 0.10 // 10% overhead
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { lineItemId: string } }
+  context: { params: Promise<{ lineItemId: string }> }
 ) {
   try {
-    const { lineItemId } = params
+    const { lineItemId } = await context.params
     const body = await request.json()
     const { margin } = body
 

@@ -753,8 +753,8 @@ ${transcript}`
                 '- All numeric fields must be bare numbers (no "$", no commas).',
                 '- If information is vague or missing, set labor_cost=null, margin_percent=null, client_price=null and record what is missing in missing_info.',
                 '',
-                'Proposal vs Estimate responsibilities:',
-                '- spec_sections: for human-readable spec sheet (proposal PDF). One section per trade (per cost code). Group by room with subitems as atomic task descriptions.',
+                'Spec Sheet vs Estimate responsibilities:',
+                '- spec_sections: for human-readable spec sheet (spec sheet PDF). One section per trade (per cost code). Group by room with subitems as atomic task descriptions.',
                 '- line_items: atomic tasks ONLY. Every described task becomes its own line item. Never group multiple tasks into one line item.',
                 '',
                 'You must obey the user prompt exactly. If any conflict exists, prefer the user prompt.'

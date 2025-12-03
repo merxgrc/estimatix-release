@@ -225,10 +225,10 @@ function calculatePricing(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { estimateId: string } }
+  context: { params: Promise<{ estimateId: string }> }
 ) {
   try {
-    const { estimateId } = params
+    const { estimateId } = await context.params
 
     if (!estimateId) {
       return NextResponse.json(

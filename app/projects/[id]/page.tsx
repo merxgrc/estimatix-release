@@ -18,7 +18,7 @@ import { RoomsTab } from "./_components/RoomsTab"
 import { PhotosTab } from "./_components/PhotosTab"
 import { DocumentsTab } from "./_components/DocumentsTab"
 import { WalkTab } from "./_components/WalkTab"
-import { ProposalsTab } from "./_components/ProposalsTab"
+import { SpecSheetsTab } from "./_components/SpecSheetsTab"
 import type { Project, Estimate, Upload, Profile } from "@/types/db"
 import { ArrowLeft, Trash2 } from "lucide-react"
 import { supabase } from "@/lib/supabase/client"
@@ -641,7 +641,7 @@ export default function ProjectDetailPage() {
                 <TabsTrigger value="photos">Photos</TabsTrigger>
                 <TabsTrigger value="documents">Documents</TabsTrigger>
                 <TabsTrigger value="walk">Walk-n-Talk</TabsTrigger>
-                <TabsTrigger value="proposals">Proposals</TabsTrigger>
+                <TabsTrigger value="proposals">Spec Sheets</TabsTrigger>
               </TabsList>
 
               <TabsContent value="summary">
@@ -702,7 +702,7 @@ export default function ProjectDetailPage() {
               </TabsContent>
 
               <TabsContent value="proposals">
-                <ProposalsTab project={project} />
+                <SpecSheetsTab project={project} />
               </TabsContent>
             </Tabs>
           </main>
