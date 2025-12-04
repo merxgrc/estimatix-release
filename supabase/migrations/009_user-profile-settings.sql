@@ -47,3 +47,4 @@ CREATE TRIGGER update_user_profile_settings_updated_at
   EXECUTE FUNCTION update_user_profile_settings_updated_at();
 
 
+

@@ -44,3 +44,4 @@ CREATE POLICY "Users can delete spec sheets" ON storage.objects
 -- You may want to manually migrate existing files from "proposals" to "spec-sheets" bucket
 -- and then remove the old bucket if desired.
 
+
