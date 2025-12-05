@@ -156,8 +156,45 @@ function formatSpecSheetBullet(item: any, originalItem?: any): string {
   }
 }
 
+/**
+ * Detect subcontractor name from line item descriptions.
+ * Only matches explicit phrases like "subcontractor:", "performed by", etc.
+ * Returns the extracted name or null if no match found.
+ */
+function detectSubcontractor(descriptions: string[]): string | null {
+  const patterns = [
+    /subcontractor:\s*(.+)/i,
+    /sub-contractor:\s*(.+)/i,
+    /performed by\s+(.+)/i,
+    /hired\s+(.+)/i,
+    /hiring\s+(.+)/i,
+    /contracted to\s+(.+)/i,
+    /sub by\s+(.+)/i,
+    /subs:\s*(.+)/i,
+  ];
+
+  for (const desc of descriptions) {
+    if (!desc || typeof desc !== 'string') continue;
+    
+    for (const pattern of patterns) {
+      const match = desc.match(pattern);
+      if (match && match[1]) {
+        // Extract and clean the subcontractor name
+        const name = match[1].trim();
+        // Remove trailing punctuation and common words
+        const cleaned = name.replace(/[.,;:]+$/, '').trim();
+        if (cleaned.length > 0) {
+          return cleaned;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 // Transform line items from json_data into sections format for the template
-function transformItemsToSections(jsonData: any): any[] {
+function transformItemsToSections(jsonData: any, lineItems: any[] = []): any[] {
   if (!jsonData?.items || !Array.isArray(jsonData.items)) {
     return [];
   }
@@ -231,11 +268,35 @@ function transformItemsToSections(jsonData: any): any[] {
       allowance = sectionTotal > 0 ? sectionTotal : null;
     }
 
+    // FEATURE 1: Calculate scope total client price from estimate_line_items
+    const matchingLineItems = lineItems.filter((item: any) => {
+      const itemCostCode = item.cost_code || getCostCodeForItem(item) || '999';
+      return itemCostCode === costCode;
+    });
+
+    let scopeTotalClientPrice: number | null = null;
+    if (matchingLineItems.length > 0) {
+      const total = matchingLineItems.reduce((sum: number, item: any) => {
+        return sum + (item.client_price || 0);
+      }, 0);
+      scopeTotalClientPrice = total > 0 ? total : null;
+    }
+
+    // FEATURE 2: Detect subcontractor from line item descriptions
+    const allSectionDescriptions = Array.from(roomsMap.values())
+      .flat()
+      .map((item: any) => item.description || '')
+      .filter((desc: string) => desc.trim().length > 0);
+    
+    const subcontractor = detectSubcontractor(allSectionDescriptions);
+
     sections.push({
       code: costCode,
       title: tradeTitleMap[costCode] || 'OTHER',
       allowance: allowance,
-      items: sectionItems
+      items: sectionItems,
+      scope_total_client_price: scopeTotalClientPrice,
+      subcontractor: subcontractor
     });
   });
 
@@ -394,6 +455,7 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
       title: section.title || '',
       allowance: allowanceValue, // Only set if cost code is allowance-eligible
       items: normalizedItems,
+      scope_total_client_price: section.scope_total_client_price || null,
       subcontractor: section.subcontractor || null,
       notes: section.notes || null
     };
@@ -478,12 +540,12 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       sections = estimate.spec_sections;
       console.log('[PDF] Using spec_sections from database:', JSON.stringify(sections, null, 2));
       
-      // Enhance sections with allowance calculations
+      // Enhance sections with allowance calculations, scope pricing, and subcontractor detection
       sections = sections.map(section => {
         const costCode = section.code || '';
         const shouldShowAllowance = isAllowanceCostCode(costCode);
         
-        // Find matching items for this section to calculate allowance
+        // Find matching items for this section
         const matchingItems = allItems.filter((item: any) => {
           const itemCostCode = item.cost_code || getCostCodeForItem(item);
           return itemCostCode === costCode;
@@ -504,6 +566,48 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
           // Not allowance-eligible, ensure allowance is null
           section.allowance = null;
         }
+
+        // FEATURE 1: Calculate scope total client price from estimate_line_items
+        let scopeTotalClientPrice: number | null = null;
+        if (matchingItems.length > 0) {
+          const total = matchingItems.reduce((sum: number, item: any) => {
+            return sum + (item.client_price || 0);
+          }, 0);
+          scopeTotalClientPrice = total > 0 ? total : null;
+        }
+        section.scope_total_client_price = scopeTotalClientPrice;
+
+        // FEATURE 2: Detect subcontractor from line item descriptions
+        // Collect all descriptions from this section's items
+        const allSectionDescriptions: string[] = [];
+        if (section.items && Array.isArray(section.items)) {
+          section.items.forEach((item: any) => {
+            if (item.subitems && Array.isArray(item.subitems)) {
+              item.subitems.forEach((subitem: string) => {
+                if (subitem && typeof subitem === 'string') {
+                  allSectionDescriptions.push(subitem);
+                }
+              });
+            }
+            if (item.text && typeof item.text === 'string') {
+              allSectionDescriptions.push(item.text);
+            }
+            if (item.label && typeof item.label === 'string') {
+              allSectionDescriptions.push(item.label);
+            }
+          });
+        }
+        // Also check matching line items directly
+        matchingItems.forEach((item: any) => {
+          if (item.description && typeof item.description === 'string') {
+            allSectionDescriptions.push(item.description);
+          }
+        });
+        
+        const subcontractor = detectSubcontractor(allSectionDescriptions);
+        if (subcontractor) {
+          section.subcontractor = subcontractor;
+        }
         
         // Note: With atomic line items, section.items already contain room groupings with subitems
         // No need to enhance with quantities since each subitem is already an atomic task description
@@ -513,7 +617,8 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       });
     } else {
       // Fallback: transform json_data.items into sections format
-      sections = transformItemsToSections(jsonData);
+      // Pass lineItems so we can calculate scope pricing and detect subcontractors
+      sections = transformItemsToSections(jsonData, allItems);
       console.log('[PDF] Using transformed json_data:', JSON.stringify(sections, null, 2));
     }
 

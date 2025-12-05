@@ -45,3 +45,4 @@ CREATE POLICY "Users can delete spec sheets" ON storage.objects
 -- and then remove the old bucket if desired.
 
 
+
