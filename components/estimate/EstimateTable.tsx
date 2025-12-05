@@ -577,14 +577,14 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       const lineItemsToSave = items.map(item => {
         const categoryInfo = COST_CATEGORIES.find(c => c.code === item.cost_code) || COST_CATEGORIES[COST_CATEGORIES.length - 1]
         
-        return {
-          ...(item.id && !item.id.startsWith('temp-') ? { id: item.id } : {}),
+        // Build the base item data
+        const itemData: any = {
           estimate_id: currentEstimateId,
           project_id: projectId,
           room_name: item.room_name || null,
           description: item.description || null,
           category: categoryInfo.label,
-          cost_code: item.cost_code,
+          cost_code: item.cost_code || '999',
           quantity: item.quantity || 1,
           unit: item.unit || 'EA',
           labor_cost: item.labor_cost || 0,
@@ -596,6 +596,13 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           pricing_source: item.pricing_source || null,
           confidence: item.confidence ?? null
         }
+        
+        // Only include id if it exists and is a valid UUID (not temp-*)
+        if (item.id && typeof item.id === 'string' && !item.id.startsWith('temp-') && item.id.length > 0) {
+          itemData.id = item.id
+        }
+        
+        return itemData
       })
 
       // Delete existing line items for this estimate, then insert new ones
@@ -610,12 +617,31 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
         // Continue anyway - upsert will handle duplicates
       }
 
+      // Validate that all items have required fields before saving
+      const invalidItems = lineItemsToSave.filter(item => {
+        return !item.description || !item.description.trim() || !item.cost_code
+      })
+      
+      if (invalidItems.length > 0) {
+        throw new Error(
+          `Please fill in description and select a cost code for all items before saving. ` +
+          `${invalidItems.length} item(s) are missing required information.`
+        )
+      }
+
       const { error: upsertError } = await supabase
         .from('estimate_line_items')
         .insert(lineItemsToSave)
         .select()
 
       if (upsertError) {
+        // Provide more helpful error messages
+        if (upsertError.message.includes('null value in column "id"')) {
+          throw new Error(
+            'Failed to save: New items must have a description and cost code. ' +
+            'Please ensure all items are filled out completely before saving.'
+          )
+        }
         throw new Error(`Failed to save line items: ${upsertError.message}`)
       }
 
@@ -633,9 +659,16 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           description: item.description || '',
           category: item.category || COST_CATEGORIES.find(c => c.code === item.cost_code)?.label || 'Other (999)',
           cost_code: item.cost_code || '999',
+          quantity: item.quantity || 1,
+          unit: item.unit || 'EA',
           labor_cost: item.labor_cost || 0,
+          material_cost: item.material_cost || 0,
+          overhead_cost: item.overhead_cost || 0,
+          direct_cost: item.direct_cost || 0,
           margin_percent: item.margin_percent || 30,
-          client_price: item.client_price || 0
+          client_price: item.client_price || 0,
+          pricing_source: item.pricing_source || null,
+          confidence: item.confidence ?? null
         })))
       }
 
@@ -655,6 +688,28 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
 
     if (!hasItems) {
       setBlockedActionMessage('Create an estimate first by using the record feature or by adding line items manually.')
+      setTimeout(() => setBlockedActionMessage(null), 5000)
+      return
+    }
+
+    // Check if there are unsaved items (items without IDs or with temp- IDs)
+    const unsavedItems = items.filter(item => !item.id || item.id.startsWith('temp-'))
+    if (unsavedItems.length > 0) {
+      setBlockedActionMessage(
+        `Please save your estimate first (${unsavedItems.length} unsaved item(s)). ` +
+        'Click "Save Estimate" to save all items before generating the spec sheet.'
+      )
+      setTimeout(() => setBlockedActionMessage(null), 5000)
+      return
+    }
+
+    // Check if items have required fields
+    const incompleteItems = items.filter(item => !item.description || !item.description.trim() || !item.cost_code)
+    if (incompleteItems.length > 0) {
+      setBlockedActionMessage(
+        `Please complete all items before generating the spec sheet. ` +
+        `${incompleteItems.length} item(s) are missing description or cost code.`
+      )
       setTimeout(() => setBlockedActionMessage(null), 5000)
       return
     }
@@ -802,7 +857,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           {saveSuccess && (
             <Alert className="mb-4 border-green-200 bg-green-50">
               <AlertDescription className="text-green-800">
-                ✓ Estimate saved successfully!
+                ✓ Estimate saved successfully! Your items are now saved and will appear in the spec sheet when you generate it.
               </AlertDescription>
             </Alert>
           )}
@@ -826,7 +881,8 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
 
           {items.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              No items yet. Click "Add Item" to get started.
+              <p className="mb-2">No items yet. Click "Add Item" to get started.</p>
+              <p className="text-sm">After adding items, fill in the description and select a cost code, then click "Save Estimate" to save them.</p>
             </div>
           ) : (
             <div className="overflow-x-auto">

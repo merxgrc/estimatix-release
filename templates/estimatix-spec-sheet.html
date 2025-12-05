@@ -39,6 +39,11 @@
       margin: 8px 0 16px 0;
     }
 
+    .section-divider {
+      margin: 4px 0 8px 0;
+      border-top: 1px solid #000;
+    }
+
     .section {
       margin-bottom: 18px;
       page-break-inside: avoid;
@@ -159,6 +164,9 @@
         <span class="scope-price">${{formatNumber scope_total_client_price}}</span>
       {{/if}}
     </div>
+
+    <!-- Horizontal line separating header from content -->
+    <hr class="section-divider" />
 
     <!-- Main bullet list for this section -->
     {{#if items}}

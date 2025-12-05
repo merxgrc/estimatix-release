@@ -249,8 +249,9 @@ function transformItemsToSections(jsonData: any, lineItems: any[] = []): any[] {
       const roomItems = roomsMap.get(roomName)!;
       
       // Each room becomes an item with subitems (atomic tasks)
+      // Use label only (not text) to avoid duplicate rendering in template
       sectionItems.push({
-        text: roomName,
+        text: null,
         label: roomName,
         subitems: roomItems.map((item: any) => item.description || '').filter((desc: string) => desc.trim().length > 0)
       });
@@ -315,7 +316,7 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
     }
 
     // Normalize each item for Handlebars
-    const normalizedItems = section.items.map((item: any, index: number) => {
+    let normalizedItems = section.items.map((item: any, index: number) => {
       const normalized: any = {};
       
       // Get section title to filter out from item text/labels (to avoid repeating "DEMO", etc.)
@@ -355,6 +356,12 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
           }
           if (labelStr) {
             normalized.label = labelStr;
+            
+            // IMPORTANT: If label exists and text matches label, clear text to avoid duplicate rendering
+            // This handles room items where both text and label are set to the same value
+            if (normalized.text && normalized.text.trim() === labelStr) {
+              normalized.text = null;
+            }
           }
         }
       }
@@ -371,6 +378,14 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
         }
       }
       // Always include subitems array, even if empty (for Handlebars)
+      
+      // IMPORTANT: If item has label and subitems, prefer label over text to avoid duplicates
+      // Clear text if it matches label (room items should use label only)
+      if (normalized.label && normalized.subitems && normalized.subitems.length > 0) {
+        if (normalized.text && normalized.text.trim() === normalized.label.trim()) {
+          normalized.text = null;
+        }
+      }
 
       // If both text and label are missing, try to use description or other fields
       if (!normalized.text && !normalized.label) {
@@ -415,6 +430,45 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
       return true;
     });
 
+    // Deduplicate room items: merge items with the same label/text
+    const roomMap = new Map<string, any>();
+    const otherItems: any[] = [];
+    
+    normalizedItems.forEach((item: any) => {
+      const roomKey = (item.label || item.text || '').trim().toLowerCase();
+      
+      // If this looks like a room item (has label and subitems, or just label)
+      if (item.label && (item.subitems?.length > 0 || !item.text)) {
+        if (roomKey && roomMap.has(roomKey)) {
+          // Merge with existing room item
+          const existing = roomMap.get(roomKey)!;
+          // Merge subitems (avoid duplicates)
+          const existingSubitems = new Set(existing.subitems || []);
+          (item.subitems || []).forEach((sub: string) => {
+            if (sub && !existingSubitems.has(sub.trim())) {
+              existingSubitems.add(sub.trim());
+            }
+          });
+          existing.subitems = Array.from(existingSubitems);
+          // Keep label, clear text if it matches
+          if (existing.text && existing.text.trim() === existing.label.trim()) {
+            existing.text = null;
+          }
+        } else if (roomKey) {
+          // First occurrence of this room
+          roomMap.set(roomKey, item);
+        } else {
+          otherItems.push(item);
+        }
+      } else {
+        // Not a room item, keep as-is
+        otherItems.push(item);
+      }
+    });
+    
+    // Combine deduplicated rooms with other items
+    normalizedItems = [...Array.from(roomMap.values()), ...otherItems];
+    
     // Ensure at least one item exists - but log a warning
     if (normalizedItems.length === 0) {
       console.warn(`[PDF] Section ${section.code} ${section.title} has no items after normalization! Original items:`, section.items);
@@ -424,7 +478,7 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
       });
     }
     
-    console.log(`[PDF] Section ${section.code} ${section.title}: ${normalizedItems.length} normalized items`);
+    console.log(`[PDF] Section ${section.code} ${section.title}: ${normalizedItems.length} normalized items (after deduplication)`);
 
     // Format allowance for display (convert number to formatted string if needed)
     let allowanceValue: number | null = null;
@@ -609,12 +663,92 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
           section.subcontractor = subcontractor;
         }
         
+        // IMPORTANT: Add new line items to existing sections if they match the cost code
+        // This ensures manually added items appear in the spec sheet
+        if (matchingItems.length > 0 && section.items && Array.isArray(section.items)) {
+          // Get all descriptions already in the section
+          const existingDescriptions = new Set<string>();
+          section.items.forEach((item: any) => {
+            if (item.subitems && Array.isArray(item.subitems)) {
+              item.subitems.forEach((subitem: string) => {
+                if (subitem && typeof subitem === 'string') {
+                  existingDescriptions.add(subitem.trim());
+                }
+              });
+            }
+          });
+          
+          // Group matching items by room
+          const itemsByRoom = new Map<string, any[]>();
+          matchingItems.forEach((item: any) => {
+            const roomName = item.room_name || 'General';
+            if (!itemsByRoom.has(roomName)) {
+              itemsByRoom.set(roomName, []);
+            }
+            itemsByRoom.get(roomName)!.push(item);
+          });
+          
+          // Add new items to sections (only if description doesn't already exist)
+          itemsByRoom.forEach((roomItems, roomName) => {
+            // Find or create room item in section
+            let roomItem = section.items.find((item: any) => 
+              (item.label || item.text || '').trim() === roomName.trim()
+            );
+            
+            if (!roomItem) {
+              // Create new room item
+              // Use label only (not text) to avoid duplicate rendering in template
+              roomItem = {
+                text: null,
+                label: roomName,
+                subitems: []
+              };
+              section.items.push(roomItem);
+            }
+            
+            // Ensure subitems array exists
+            if (!roomItem.subitems) {
+              roomItem.subitems = [];
+            }
+            
+            // Add descriptions from matching items that aren't already in the section
+            roomItems.forEach((item: any) => {
+              if (item.description && typeof item.description === 'string') {
+                const desc = item.description.trim();
+                if (desc && !existingDescriptions.has(desc)) {
+                  roomItem.subitems.push(desc);
+                  existingDescriptions.add(desc);
+                }
+              }
+            });
+          });
+        }
+        
         // Note: With atomic line items, section.items already contain room groupings with subitems
         // No need to enhance with quantities since each subitem is already an atomic task description
         // The AI parser creates spec_sections with proper room → subitems structure
         
         return section;
       });
+      
+      // After enhancing existing sections, check for line items that don't match any section
+      // This handles manually added items that weren't in the original AI parsing
+      const existingCostCodes = new Set(sections.map((s: any) => s.code || '').filter((c: string) => c));
+      const unmatchedItems = allItems.filter((item: any) => {
+        const itemCostCode = item.cost_code || getCostCodeForItem(item) || '999';
+        return !existingCostCodes.has(itemCostCode);
+      });
+      
+      // If there are unmatched items, create sections for them
+      if (unmatchedItems.length > 0) {
+        console.log('[PDF] Found', unmatchedItems.length, 'line items without matching sections, creating new sections');
+        // Create sections for unmatched items using transformItemsToSections
+        const unmatchedJsonData = { items: unmatchedItems };
+        const newSections = transformItemsToSections(unmatchedJsonData, unmatchedItems);
+        // Merge new sections with existing ones
+        sections = [...sections, ...newSections];
+        console.log('[PDF] Added', newSections.length, 'new sections for unmatched items');
+      }
     } else {
       // Fallback: transform json_data.items into sections format
       // Pass lineItems so we can calculate scope pricing and detect subcontractors
