@@ -115,15 +115,13 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
             if (initialData?.items) {
               setItems(initialData.items.map((item, idx) => ({
                 id: `temp-${idx}`,
-                room_name: item.room_name || 'General',
+                room_name: (item as any).room_name || '', // Preserve room_name from initialData
                 description: item.description || '',
-                category: item.category || 'Other',
-                cost_code: item.cost_code || '999',
-                quantity: item.quantity ?? 1,
-                unit: item.unit || 'EA',
-                labor_cost: item.labor_cost || 0,
-                margin_percent: item.margin_percent || 0,
-                client_price: item.client_price || 0
+                category: item.category || 'Other (999)',
+                cost_code: '999',
+                labor_cost: (item as any).labor_cost || 0,
+                margin_percent: (item as any).margin_percent || 30,
+                client_price: (item as any).client_price || 0
               })))
             }
             return
@@ -675,9 +673,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       }
 
       setSaveSuccess(true)
-      if (currentEstimateId) {
-        onSave?.(currentEstimateId, grandTotal)
-      }
+      onSave?.(currentEstimateId, grandTotal)
 
     } catch (err) {
       console.error('Save estimate error:', err)

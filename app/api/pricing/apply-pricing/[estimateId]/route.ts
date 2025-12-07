@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient, requireAuth } from '@/lib/supabase/server'
 import { matchTask } from '@/lib/pricing/match-task'
+import { upsertSelectionFromLineItem, suggestAllowanceForSelection } from '@/lib/selections'
 
 export const runtime = 'nodejs'
 
@@ -447,6 +448,44 @@ export async function POST(
       } else {
         updatedCount++
       }
+    }
+
+    // 8. Handle selections and allowances (non-blocking)
+    // After pricing is applied, sync selections for allowance line items
+    try {
+      // Load all line items with is_allowance = true
+      const { data: allowanceLineItems, error: allowanceError } = await supabase
+        .from('estimate_line_items')
+        .select('*')
+        .eq('estimate_id', estimateId)
+        .eq('is_allowance', true)
+
+      if (!allowanceError && allowanceLineItems && allowanceLineItems.length > 0) {
+        for (const lineItem of allowanceLineItems) {
+          try {
+            // Upsert selection from line item
+            const selection = await upsertSelectionFromLineItem(
+              {
+                ...lineItem,
+                estimate_id: estimateId,
+                room: lineItem.room_name || undefined,
+              },
+              user.id
+            )
+
+            // If selection was created/updated and allowance is null, suggest it
+            if (selection && selection.allowance === null) {
+              await suggestAllowanceForSelection(selection, user.id)
+            }
+          } catch (selectionError) {
+            // Log but don't fail - selections are additive
+            console.warn(`Failed to process selection for line item ${lineItem.id}:`, selectionError)
+          }
+        }
+      }
+    } catch (selectionsError) {
+      // Log but don't fail - selections failures should never break pricing
+      console.warn('Selections processing failed (non-blocking):', selectionsError)
     }
 
     return NextResponse.json({

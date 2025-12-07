@@ -67,10 +67,23 @@
       font-size: 11pt;
     }
 
+    .scope-price-group {
+      display: flex;
+      gap: 12px;
+      margin-left: auto;
+      align-items: baseline;
+    }
+
+    .scope-allowance {
+      font-weight: bold;
+      font-size: 11pt;
+      white-space: nowrap;
+    }
+
     .scope-price {
       font-weight: bold;
       font-size: 11pt;
-      margin-left: auto;
+      white-space: nowrap;
     }
 
     .allowance {
@@ -160,9 +173,14 @@
           <span class="allowance">Allowance: ${{formatNumber allowance}}</span>
         {{/if}}
       </span>
-      {{#if scope_total_client_price}}
-        <span class="scope-price">${{formatNumber scope_total_client_price}}</span>
-      {{/if}}
+      <span class="scope-price-group">
+        {{#if selections_allowance_total}}
+          <span class="scope-allowance">Allowance: ${{formatNumber selections_allowance_total}}</span>
+        {{/if}}
+        {{#if scope_total_client_price}}
+          <span class="scope-price">${{formatNumber scope_total_client_price}}</span>
+        {{/if}}
+      </span>
     </div>
 
     <!-- Horizontal line separating header from content -->

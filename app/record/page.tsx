@@ -13,25 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Sparkles, Mic } from "lucide-react"
 import { supabase } from "@/lib/supabase/client"
 import { useSidebar } from "@/lib/sidebar-context"
-
-interface EstimateData {
-  items: Array<{
-    category: 'Windows' | 'Doors' | 'Cabinets' | 'Flooring' | 'Plumbing' | 'Electrical' | 'Other'
-    description: string
-    quantity: number
-    dimensions?: {
-      unit: 'in' | 'ft' | 'cm' | 'm'
-      width: number
-      height: number
-      depth?: number
-    } | null
-    unit_cost?: number
-    total?: number
-    notes?: string
-  }>
-  assumptions?: string[]
-  missing_info?: string[]
-}
+import type { EstimateData } from "@/types/estimate"
 
 interface ProjectIntakeData {
   projectName: string
@@ -204,7 +186,25 @@ export default function RecordPage() {
       }
 
       const result = await response.json()
-      setEstimateData(result.data)
+      // Transform API response to match unified EstimateData type
+      // The API already returns the correct structure, but we ensure all required fields are present
+      const transformedData: EstimateData = {
+        items: (result.data.items || []).map((item: any) => ({
+          room_name: item.room_name || 'General',
+          description: item.description || '',
+          category: item.category || 'Other',
+          cost_code: item.cost_code || '999',
+          quantity: item.quantity ?? 1,
+          unit: item.unit || 'EA',
+          labor_cost: item.labor_cost ?? 0,
+          margin_percent: item.margin_percent ?? 0,
+          client_price: item.client_price ?? 0,
+          notes: item.notes || undefined
+        })),
+        assumptions: result.data.assumptions || [],
+        missing_info: result.data.missing_info || []
+      }
+      setEstimateData(transformedData)
       setEstimateId(result.estimateId ?? null)
       setCurrentStep('estimate')
 

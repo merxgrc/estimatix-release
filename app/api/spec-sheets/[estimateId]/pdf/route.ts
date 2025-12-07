@@ -194,7 +194,7 @@ function detectSubcontractor(descriptions: string[]): string | null {
 }
 
 // Transform line items from json_data into sections format for the template
-function transformItemsToSections(jsonData: any, lineItems: any[] = []): any[] {
+function transformItemsToSections(jsonData: any, lineItems: any[] = [], selectionsByCostCode?: Map<string, any[]>): any[] {
   if (!jsonData?.items || !Array.isArray(jsonData.items)) {
     return [];
   }
@@ -291,13 +291,51 @@ function transformItemsToSections(jsonData: any, lineItems: any[] = []): any[] {
     
     const subcontractor = detectSubcontractor(allSectionDescriptions);
 
+    // Find matching selections for this scope
+    const matchingSelections = selectionsByCostCode?.get(costCode) || [];
+    
+    // Calculate total allowance from selections (sum all allowances)
+    let totalAllowance: number | null = null;
+    if (matchingSelections.length > 0) {
+      const allowanceSum = matchingSelections.reduce((sum: number, sel: any) => {
+        return sum + (sel.allowance || 0);
+      }, 0);
+      if (allowanceSum > 0) {
+        totalAllowance = allowanceSum;
+      }
+    }
+
+    // Collect unique subcontractors from selections
+    const subcontractors = new Set<string>();
+    matchingSelections.forEach((sel: any) => {
+      if (sel.subcontractor && sel.subcontractor.trim()) {
+        subcontractors.add(sel.subcontractor.trim());
+      }
+    });
+    const subcontractorList = Array.from(subcontractors);
+
+    // Prefer subcontractor from selections, fallback to detected
+    let finalSubcontractor = subcontractor;
+    if (subcontractorList.length > 0) {
+      finalSubcontractor = subcontractorList.join(', ');
+    }
+
     sections.push({
       code: costCode,
       title: tradeTitleMap[costCode] || 'OTHER',
       allowance: allowance,
       items: sectionItems,
       scope_total_client_price: scopeTotalClientPrice,
-      subcontractor: subcontractor
+      subcontractor: finalSubcontractor,
+      // Selections data for template
+      selections: matchingSelections.map((sel: any) => ({
+        title: sel.title,
+        description: sel.description,
+        room: sel.room,
+        allowance: sel.allowance,
+        subcontractor: sel.subcontractor,
+      })),
+      selections_allowance_total: totalAllowance,
     });
   });
 
@@ -511,7 +549,10 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
       items: normalizedItems,
       scope_total_client_price: section.scope_total_client_price || null,
       subcontractor: section.subcontractor || null,
-      notes: section.notes || null
+      notes: section.notes || null,
+      // Selections data for template
+      selections: section.selections || [],
+      selections_allowance_total: section.selections_allowance_total || null,
     };
   }).filter(section => {
     // Remove sections with no items
@@ -586,6 +627,29 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       console.log('[PDF] Using estimate_line_items from database:', allItems.length, 'items');
     }
 
+    // Fetch selections for this estimate
+    const { data: selectionsData } = await supabase
+      .from('selections')
+      .select('*')
+      .eq('estimate_id', estimateId)
+      .order('created_at', { ascending: true });
+
+    console.log('[PDF] Loaded', selectionsData?.length || 0, 'selections for estimate');
+
+    // Group selections by cost_code for quick lookup
+    const selectionsByCostCode = new Map<string, any[]>();
+    if (selectionsData) {
+      selectionsData.forEach((selection: any) => {
+        const costCode = selection.cost_code || '';
+        if (costCode) {
+          if (!selectionsByCostCode.has(costCode)) {
+            selectionsByCostCode.set(costCode, []);
+          }
+          selectionsByCostCode.get(costCode)!.push(selection);
+        }
+      });
+    }
+
     // Use spec_sections from database, or fallback to transformed json_data
     let sections: any[] = [];
     
@@ -604,6 +668,29 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
           const itemCostCode = item.cost_code || getCostCodeForItem(item);
           return itemCostCode === costCode;
         });
+
+        // Find matching selections for this scope
+        const matchingSelections = selectionsByCostCode.get(costCode) || [];
+        
+        // Calculate total allowance from selections (sum all allowances)
+        let totalAllowance: number | null = null;
+        if (matchingSelections.length > 0) {
+          const allowanceSum = matchingSelections.reduce((sum: number, sel: any) => {
+            return sum + (sel.allowance || 0);
+          }, 0);
+          if (allowanceSum > 0) {
+            totalAllowance = allowanceSum;
+          }
+        }
+
+        // Collect unique subcontractors from selections
+        const subcontractors = new Set<string>();
+        matchingSelections.forEach((sel: any) => {
+          if (sel.subcontractor && sel.subcontractor.trim()) {
+            subcontractors.add(sel.subcontractor.trim());
+          }
+        });
+        const subcontractorList = Array.from(subcontractors);
         
         if (shouldShowAllowance) {
           // If allowance is not explicitly set, calculate it from matching items
@@ -658,10 +745,28 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
           }
         });
         
-        const subcontractor = detectSubcontractor(allSectionDescriptions);
-        if (subcontractor) {
-          section.subcontractor = subcontractor;
+        // Detect subcontractor from line item descriptions (existing logic)
+        const detectedSubcontractor = detectSubcontractor(allSectionDescriptions);
+        
+        // Prefer subcontractor from selections, fallback to detected
+        if (subcontractorList.length > 0) {
+          // Use first subcontractor from selections (or combine if multiple)
+          section.subcontractor = subcontractorList.join(', ');
+        } else if (detectedSubcontractor) {
+          section.subcontractor = detectedSubcontractor;
         }
+
+        // Attach selections data to section for template rendering
+        section.selections = matchingSelections.map((sel: any) => ({
+          title: sel.title,
+          description: sel.description,
+          room: sel.room,
+          allowance: sel.allowance,
+          subcontractor: sel.subcontractor,
+        }));
+
+        // Attach total allowance for header display
+        section.selections_allowance_total = totalAllowance;
         
         // IMPORTANT: Add new line items to existing sections if they match the cost code
         // This ensures manually added items appear in the spec sheet
@@ -744,7 +849,7 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
         console.log('[PDF] Found', unmatchedItems.length, 'line items without matching sections, creating new sections');
         // Create sections for unmatched items using transformItemsToSections
         const unmatchedJsonData = { items: unmatchedItems };
-        const newSections = transformItemsToSections(unmatchedJsonData, unmatchedItems);
+        const newSections = transformItemsToSections(unmatchedJsonData, unmatchedItems, selectionsByCostCode);
         // Merge new sections with existing ones
         sections = [...sections, ...newSections];
         console.log('[PDF] Added', newSections.length, 'new sections for unmatched items');
@@ -752,7 +857,7 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
     } else {
       // Fallback: transform json_data.items into sections format
       // Pass lineItems so we can calculate scope pricing and detect subcontractors
-      sections = transformItemsToSections(jsonData, allItems);
+      sections = transformItemsToSections(jsonData, allItems, selectionsByCostCode);
       console.log('[PDF] Using transformed json_data:', JSON.stringify(sections, null, 2));
     }
 

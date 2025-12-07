@@ -127,6 +127,8 @@ export interface Database {
           labor_cost: number | null
           margin_percent: number | null
           client_price: number | null
+          selection_id: string | null
+          is_allowance: boolean | null
           created_at: string
           updated_at: string
         }
@@ -146,6 +148,8 @@ export interface Database {
           labor_cost?: number | null
           margin_percent?: number | null
           client_price?: number | null
+          selection_id?: string | null
+          is_allowance?: boolean | null
           created_at?: string
           updated_at?: string
         }
@@ -165,6 +169,8 @@ export interface Database {
           labor_cost?: number | null
           margin_percent?: number | null
           client_price?: number | null
+          selection_id?: string | null
+          is_allowance?: boolean | null
           created_at?: string
           updated_at?: string
         }
@@ -181,6 +187,72 @@ export interface Database {
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "estimate_line_items_selection_id_fkey"
+            columns: ["selection_id"]
+            isOneToOne: false
+            referencedRelation: "selections"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      selections: {
+        Row: {
+          id: string
+          estimate_id: string
+          cost_code: string | null
+          room: string | null
+          category: string | null
+          title: string
+          description: string | null
+          allowance: number | null
+          suggested_allowance: number | null
+          subcontractor: string | null
+          source: 'manual' | 'voice' | 'ai_text' | 'file' | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          estimate_id: string
+          cost_code?: string | null
+          room?: string | null
+          category?: string | null
+          title: string
+          description?: string | null
+          allowance?: number | null
+          suggested_allowance?: number | null
+          subcontractor?: string | null
+          source?: 'manual' | 'voice' | 'ai_text' | 'file' | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          estimate_id?: string
+          cost_code?: string | null
+          room?: string | null
+          category?: string | null
+          title?: string
+          description?: string | null
+          allowance?: number | null
+          suggested_allowance?: number | null
+          subcontractor?: string | null
+          source?: 'manual' | 'voice' | 'ai_text' | 'file' | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "selections_estimate_id_fkey"
+            columns: ["estimate_id"]
+            isOneToOne: false
+            referencedRelation: "estimates"
             referencedColumns: ["id"]
           }
         ]
@@ -293,6 +365,10 @@ export type EstimateLineItemRow = Database['public']['Tables']['estimate_line_it
 export type EstimateLineItemInsert = Database['public']['Tables']['estimate_line_items']['Insert']
 export type EstimateLineItemUpdate = Database['public']['Tables']['estimate_line_items']['Update']
 
+export type Selection = Database['public']['Tables']['selections']['Row']
+export type SelectionInsert = Database['public']['Tables']['selections']['Insert']
+export type SelectionUpdate = Database['public']['Tables']['selections']['Update']
+
 // Extended EstimateLineItem interface supporting new pricing model
 export interface EstimateLineItem {
   id?: string
@@ -324,6 +400,10 @@ export interface EstimateLineItem {
   pricing_source?: 'task_library' | 'user_library' | 'manual'
   confidence?: number
   matched_via?: 'semantic' | 'fuzzy' | 'cost_code_only'
+
+  // Selections + allowances
+  selection_id?: string | null
+  is_allowance?: boolean
 
   notes?: string
 }

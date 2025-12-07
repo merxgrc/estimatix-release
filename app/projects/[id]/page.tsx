@@ -19,6 +19,7 @@ import { PhotosTab } from "./_components/PhotosTab"
 import { DocumentsTab } from "./_components/DocumentsTab"
 import { WalkTab } from "./_components/WalkTab"
 import { SpecSheetsTab } from "./_components/SpecSheetsTab"
+import { SelectionsTab } from "./_components/SelectionsTab"
 import type { Project, Estimate, Upload, Profile } from "@/types/db"
 import { ArrowLeft, Trash2 } from "lucide-react"
 import { supabase } from "@/lib/supabase/client"
@@ -633,10 +634,11 @@ export default function ProjectDetailPage() {
           <main className="p-4 md:p-6">
             {/* Tab Navigation */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="w-full grid grid-cols-8 gap-1">
+              <TabsList className="w-full grid grid-cols-9 gap-1">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="estimate">Estimate</TabsTrigger>
                 <TabsTrigger value="pricing">Pricing</TabsTrigger>
+                <TabsTrigger value="selections">Selections</TabsTrigger>
                 <TabsTrigger value="rooms">Rooms</TabsTrigger>
                 <TabsTrigger value="photos">Photos</TabsTrigger>
                 <TabsTrigger value="documents">Documents</TabsTrigger>
@@ -681,6 +683,13 @@ export default function ProjectDetailPage() {
                 <PricingTab
                   project={project}
                   estimates={estimates}
+                  activeEstimateId={activeEstimateId}
+                />
+              </TabsContent>
+
+              <TabsContent value="selections">
+                <SelectionsTab
+                  project={project}
                   activeEstimateId={activeEstimateId}
                 />
               </TabsContent>

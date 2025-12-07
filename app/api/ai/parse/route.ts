@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase/server'
+import { suggestAllowanceForSelection } from '@/lib/selections'
+import { requireAuth } from '@/lib/supabase/server'
 
 export const runtime = 'nodejs' // Disable Edge runtime for OpenAI API compatibility
 
@@ -61,12 +63,33 @@ const ParseResultSchema = z.object({
 
 type ParseResult = z.infer<typeof ParseResultSchema>
 
+// Selection classification schema
+const SelectionClassificationSchema = z.object({
+  is_selection: z.boolean(),
+  category: z.string().nullable(),
+  product_title: z.string().nullable(),
+  extended_description: z.string().nullable(),
+  subcontractor: z.string().nullable(),
+  stated_allowance: z.number().nullable(),
+})
+
+type SelectionClassification = z.infer<typeof SelectionClassificationSchema>
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const { transcript, projectId } = body
     
     console.log('AI Parse API called with:', { projectId, transcriptLength: transcript?.length })
+    
+    // Get user for selection creation (needed for ownership verification)
+    const user = await requireAuth()
+    if (!user || !user.id) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      )
+    }
     
     // Validate required fields
     if (!transcript || typeof transcript !== 'string' || transcript.trim().length === 0) {
@@ -134,10 +157,12 @@ export async function POST(req: NextRequest) {
           category: item.category || 'Other',
           description: item.description || '',
           cost_code: item.cost_code || '999',
-          room_name: item.room || null, // Preserve AI-detected room, use null if not detected
-          labor_cost: item.labor_cost ?? null,
-          margin_percent: item.margin_percent ?? null,
-          client_price: item.client_price ?? null,
+          room_name: item.room || 'General', // Default to 'General' if not detected
+          quantity: item.quantity ?? 1, // Default to 1 if not provided
+          unit: item.unit || 'EA', // Default to 'EA' if not provided
+          labor_cost: item.labor_cost ?? 0, // Default to 0 if null
+          margin_percent: item.margin_percent ?? 0, // Default to 0 if null
+          client_price: item.client_price ?? 0, // Default to 0 if null
           notes: item.notes || null
         }
       }
@@ -146,10 +171,12 @@ export async function POST(req: NextRequest) {
         category: 'Other',
         description: '',
         cost_code: '999',
-        room_name: null, // No default room - let user select
-        labor_cost: null,
-        margin_percent: null,
-        client_price: null,
+        room_name: 'General',
+        quantity: 1,
+        unit: 'EA',
+        labor_cost: 0,
+        margin_percent: 0,
+        client_price: 0,
         notes: null
       }
     })
@@ -238,20 +265,37 @@ export async function POST(req: NextRequest) {
         description: item.description,
         category: item.category,
         cost_code: item.cost_code,
+        quantity: item.quantity,
+        unit: item.unit,
         labor_cost: item.labor_cost,
         margin_percent: item.margin_percent,
         client_price: item.client_price
       }))
 
-      const { error: lineItemsError } = await supabase
+      const { data: insertedLineItems, error: lineItemsError } = await supabase
         .from('estimate_line_items')
         .insert(lineItemsToInsert)
+        .select()
 
       if (lineItemsError) {
         console.error('Error saving line items to database:', lineItemsError)
         // Don't fail the request, but log the error
       } else {
-        console.log(`Saved ${lineItemsToInsert.length} atomic line items to estimate_line_items table`)
+        console.log(`Saved ${insertedLineItems?.length || 0} atomic line items to estimate_line_items table`)
+        
+        // AI-assisted selection detection (non-blocking)
+        // Process each line item to detect if it's a selection
+        if (insertedLineItems && insertedLineItems.length > 0) {
+          await detectAndCreateSelections(
+            insertedLineItems,
+            estimateId,
+            user.id,
+            openaiApiKey
+          ).catch((err) => {
+            // Log but don't fail - selection detection is additive
+            console.warn('Selection detection failed (non-blocking):', err)
+          })
+        }
       }
     }
 
@@ -264,11 +308,15 @@ export async function POST(req: NextRequest) {
           description: item.description,
           cost_code: item.cost_code,
           room_name: item.room_name,
+          quantity: item.quantity,
+          unit: item.unit,
           labor_cost: item.labor_cost,
           margin_percent: item.margin_percent,
           client_price: item.client_price,
           notes: item.notes || ''
-        }))
+        })),
+        assumptions: parseResult.assumptions || [],
+        missing_info: parseResult.missing_info || []
       },
       estimateId: estimateId
     })
@@ -885,4 +933,205 @@ ${transcript}`
   
   // Should not reach here, but handle it just in case
   throw lastError || new Error('Failed to call OpenAI API after retries')
+}
+
+/**
+ * AI-assisted selection detection
+ * Classifies each line item description to determine if it's a product selection
+ * and auto-creates selection rows when detected
+ */
+async function detectAndCreateSelections(
+  lineItems: Array<{
+    id: string
+    estimate_id: string
+    project_id: string
+    room_name: string | null
+    description: string
+    category: string
+    cost_code: string
+  }>,
+  estimateId: string,
+  userId: string,
+  openaiApiKey: string
+): Promise<void> {
+  const supabase = await createServerClient()
+  
+  console.log(`[Selection Detection] Processing ${lineItems.length} line items for selection detection`)
+  
+  // Process each line item (with error tolerance)
+  for (const lineItem of lineItems) {
+    try {
+      // Skip if description is empty
+      if (!lineItem.description || lineItem.description.trim().length === 0) {
+        continue
+      }
+
+      // Classify the line item description
+      const classification = await classifyLineItemAsSelection(
+        lineItem.description,
+        openaiApiKey
+      )
+
+      if (!classification || !classification.is_selection) {
+        continue // Not a selection, skip
+      }
+
+      console.log(`[Selection Detection] Detected selection: "${lineItem.description}"`)
+
+      // Create selection row
+      const selectionData: any = {
+        estimate_id: estimateId,
+        cost_code: lineItem.cost_code || null,
+        room: lineItem.room_name || null,
+        category: classification.category || lineItem.category || null,
+        title: classification.product_title || lineItem.description.substring(0, 100) || 'Untitled Selection',
+        description: classification.extended_description || lineItem.description || null,
+        subcontractor: classification.subcontractor || null,
+        allowance: classification.stated_allowance || null,
+        source: 'ai_text',
+      }
+
+      const { data: newSelection, error: insertError } = await supabase
+        .from('selections')
+        .insert(selectionData)
+        .select()
+        .single()
+
+      if (insertError) {
+        console.error(`[Selection Detection] Failed to create selection for "${lineItem.description}":`, insertError)
+        continue // Skip to next item
+      }
+
+      console.log(`[Selection Detection] Created selection: ${newSelection.id}`)
+
+      // Update line item to reference the selection (we have the ID from insert)
+      const updateData: any = {
+        selection_id: newSelection.id,
+      }
+
+      // Set is_allowance flag if selection has an allowance
+      if (newSelection.allowance !== null) {
+        updateData.is_allowance = true
+      }
+
+      const { error: updateError } = await supabase
+        .from('estimate_line_items')
+        .update(updateData)
+        .eq('id', lineItem.id)
+
+      if (updateError) {
+        console.warn(`[Selection Detection] Failed to link selection to line item:`, updateError)
+        // Continue - selection was created successfully
+      } else {
+        console.log(`[Selection Detection] Linked selection ${newSelection.id} to line item ${lineItem.id}`)
+      }
+
+      // Trigger allowance suggestion if allowance is null
+      if (newSelection.allowance === null) {
+        try {
+          await suggestAllowanceForSelection(newSelection, userId)
+          console.log(`[Selection Detection] Triggered allowance suggestion for selection ${newSelection.id}`)
+        } catch (suggestionError) {
+          console.warn(`[Selection Detection] Allowance suggestion failed:`, suggestionError)
+          // Non-blocking - continue
+        }
+      }
+
+    } catch (error) {
+      // Log but continue processing other items
+      console.warn(`[Selection Detection] Error processing line item "${lineItem.description}":`, error)
+    }
+  }
+
+  console.log(`[Selection Detection] Completed processing ${lineItems.length} line items`)
+}
+
+/**
+ * Classify a line item description to determine if it's a product selection
+ * Uses GPT-4o-mini for lightweight classification
+ */
+async function classifyLineItemAsSelection(
+  description: string,
+  apiKey: string
+): Promise<SelectionClassification | null> {
+  try {
+    const prompt = `Classify the following construction line item description to determine if it represents a product selection (specific brand, model, or product choice).
+
+A line item is a SELECTION if:
+- It mentions a specific brand name (e.g., "Town & Country", "GE Café", "Emser Tile")
+- It mentions a model number or product identifier (e.g., "TC42", "36-inch Range", "Aura White 12x24")
+- It mentions a product type that implies a choice (e.g., "Fireplace allowance", "Tile selection", "We're choosing...")
+- It mentions a price or allowance amount
+
+Return JSON with:
+- is_selection: boolean (true if this is a product selection)
+- category: string or null (product category like "Prefab Fireplaces", "Appliances", "Tile", etc.)
+- product_title: string or null (short product name/title, e.g., "Town & Country TC42 Fireplace")
+- extended_description: string or null (full descriptive text if available)
+- subcontractor: string or null (if mentioned, e.g., "Pacific Hearth & Home")
+- stated_allowance: number or null (if a dollar amount is mentioned, extract as number)
+
+Example inputs and outputs:
+Input: "Town & Country TC42 Fireplace"
+Output: {"is_selection": true, "category": "Prefab Fireplaces", "product_title": "Town & Country TC42 Fireplace", "extended_description": null, "subcontractor": null, "stated_allowance": null}
+
+Input: "Fireplace allowance $18,000"
+Output: {"is_selection": true, "category": "Prefab Fireplaces", "product_title": "Fireplace", "extended_description": null, "subcontractor": null, "stated_allowance": 18000}
+
+Input: "Remove upper cabinets"
+Output: {"is_selection": false, "category": null, "product_title": null, "extended_description": null, "subcontractor": null, "stated_allowance": null}
+
+Input: "Emser Tile — Aura White 12x24 installed by Pacific Tile"
+Output: {"is_selection": true, "category": "Tile", "product_title": "Emser Tile Aura White 12x24", "extended_description": null, "subcontractor": "Pacific Tile", "stated_allowance": null}
+
+Return JSON only, no markdown.
+
+Description to classify:
+${description}`
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a construction product classification assistant. Return only valid JSON matching the SelectionClassificationSchema.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.1,
+        max_tokens: 200,
+        response_format: { type: 'json_object' }
+      })
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(`OpenAI API error: ${response.status} ${errorData.error?.message || response.statusText}`)
+    }
+
+    const result = await response.json()
+    const content = result.choices[0]?.message?.content
+
+    if (!content) {
+      throw new Error('No content returned from OpenAI')
+    }
+
+    const parsed = JSON.parse(content)
+    const validated = SelectionClassificationSchema.parse(parsed)
+
+    return validated
+
+  } catch (error) {
+    console.warn(`[Selection Classification] Failed to classify "${description}":`, error)
+    return null // Return null on error (non-blocking)
+  }
 }

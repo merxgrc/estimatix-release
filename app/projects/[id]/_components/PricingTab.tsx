@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -55,6 +56,26 @@ interface LineItem {
   matched_via?: 'semantic' | 'fuzzy' | 'cost_code_only' | null
 }
 
+interface Selection {
+  id: string
+  estimate_id: string
+  cost_code: string | null
+  room: string | null
+  category: string | null
+  title: string
+  description: string | null
+  allowance: number | null
+  subcontractor: string | null
+  source: 'manual' | 'voice' | 'ai_text' | 'file' | null
+}
+
+interface GroupedSelection {
+  costCode: string
+  scopeLabel: string
+  totalAllowance: number
+  selections: Selection[]
+}
+
 interface PricingTabProps {
   project: Project
   estimates: Estimate[]
@@ -98,10 +119,21 @@ function ConfidenceBadge({ value }: { value: number | null }) {
   )
 }
 
+// Currency formatting utility
+const formatCurrency = (value: number | null | undefined) =>
+  new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  }).format(value || 0)
+
 export function PricingTab({ project, estimates, activeEstimateId }: PricingTabProps) {
   const router = useRouter()
   const { user } = useAuth()
   const [lineItems, setLineItems] = useState<LineItem[]>([])
+  const [selections, setSelections] = useState<Selection[]>([])
+  const [isLoadingSelections, setIsLoadingSelections] = useState(false)
+  const [selectionsError, setSelectionsError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isApplyingPricing, setIsApplyingPricing] = useState(false)
@@ -143,6 +175,74 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
 
     loadLineItems()
   }, [activeEstimateId])
+
+  // Load selections when estimate changes
+  useEffect(() => {
+    const loadSelections = async () => {
+      if (!activeEstimateId) {
+        setSelections([])
+        setIsLoadingSelections(false)
+        return
+      }
+
+      try {
+        setIsLoadingSelections(true)
+        setSelectionsError(null)
+
+        const { data, error: fetchError } = await supabase
+          .from('selections')
+          .select('*')
+          .eq('estimate_id', activeEstimateId)
+          .order('created_at', { ascending: true })
+
+        if (fetchError) {
+          throw new Error(`Failed to load selections: ${fetchError.message}`)
+        }
+
+        setSelections(data || [])
+      } catch (err) {
+        console.error('Error loading selections:', err)
+        setSelectionsError(err instanceof Error ? err.message : 'Failed to load selections')
+      } finally {
+        setIsLoadingSelections(false)
+      }
+    }
+
+    loadSelections()
+  }, [activeEstimateId])
+
+  // Group selections by cost_code (scope)
+  const groupedSelections: GroupedSelection[] = (() => {
+    const byCostCode = new Map<string, Selection[]>()
+    
+    selections.forEach(sel => {
+      const costCode = sel.cost_code || '999'
+      if (!byCostCode.has(costCode)) {
+        byCostCode.set(costCode, [])
+      }
+      byCostCode.get(costCode)!.push(sel)
+    })
+
+    return Array.from(byCostCode.entries()).map(([costCode, selections]) => {
+      // Get scope label
+      const category = COST_CATEGORIES.find(c => c.code === costCode)
+      const scopeLabel = category 
+        ? `${costCode} – ${category.label.replace(/^[^–]+–\s*/, '')}`
+        : `${costCode} – ${selections[0]?.category || selections[0]?.title || 'Selection'}`
+
+      // Calculate total allowance
+      const totalAllowance = selections.reduce((sum, sel) => {
+        return sum + (sel.allowance || 0)
+      }, 0)
+
+      return {
+        costCode,
+        scopeLabel,
+        totalAllowance,
+        selections
+      }
+    }).sort((a, b) => a.costCode.localeCompare(b.costCode))
+  })()
 
   // Handle Apply Pricing button
   const handleApplyPricing = async () => {
@@ -618,6 +718,85 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Selections & Allowances Summary */}
+      {!isLoading && activeEstimateId && (
+        <section className="mt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-base font-semibold">Selections & Allowances</h2>
+            <Link
+              href={`/projects/${project.id}?tab=selections`}
+              className="text-xs text-muted-foreground hover:text-foreground underline"
+            >
+              Manage selections
+            </Link>
+          </div>
+
+          {isLoadingSelections ? (
+            <Card>
+              <CardContent className="py-4">
+                <div className="text-center text-sm text-muted-foreground">
+                  Loading selections...
+                </div>
+              </CardContent>
+            </Card>
+          ) : selectionsError ? (
+            <Card>
+              <CardContent className="py-4">
+                <p className="text-xs text-destructive">
+                  Could not load selections right now.
+                </p>
+              </CardContent>
+            </Card>
+          ) : groupedSelections.length === 0 ? (
+            <Card>
+              <CardContent className="py-4">
+                <p className="text-xs text-muted-foreground">
+                  No selections or allowances detected yet for this estimate.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {groupedSelections.map(group => (
+                <div
+                  key={group.costCode}
+                  className="border rounded-lg px-3 py-2 bg-background/60 flex flex-col gap-1"
+                >
+                  <div className="flex items-baseline justify-between">
+                    <div className="font-semibold text-sm">
+                      {group.scopeLabel}
+                    </div>
+                    {group.totalAllowance > 0 && (
+                      <div className="text-sm font-semibold">
+                        Allowance:{' '}
+                        <span className="tabular-nums">
+                          {formatCurrency(group.totalAllowance)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    {group.selections.map(sel => (
+                      <div key={sel.id} className="flex gap-1 flex-wrap">
+                        <span className="font-medium">
+                          {sel.room || sel.category || ''}{sel.room || sel.category ? ':' : ''}
+                        </span>
+                        <span>{sel.title || sel.description || 'Untitled Selection'}</span>
+                        {sel.subcontractor && (
+                          <span className="italic text-[11px] ml-1">
+                            (Sub: {sel.subcontractor})
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       )}
     </div>
   )
