@@ -71,6 +71,20 @@ export async function POST(
       )
     }
 
+    // CRITICAL: Skip allowance items - do not recalculate pricing for them
+    const isAllowance = lineItem.is_allowance === true || 
+                       (lineItem.description && lineItem.description.toUpperCase().trim().startsWith('ALLOWANCE:'))
+    
+    if (isAllowance) {
+      return NextResponse.json(
+        { 
+          error: 'Cannot recalculate pricing for allowance items. Allowances have fixed pricing and 0% margin.',
+          is_allowance: true
+        },
+        { status: 400 }
+      )
+    }
+
     // Recalculate pricing based on existing cost breakdown
     const labor_cost = lineItem.labor_cost || 0
     const material_cost = lineItem.material_cost || 0

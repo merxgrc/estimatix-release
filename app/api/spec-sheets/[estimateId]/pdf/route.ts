@@ -6,6 +6,7 @@ import { renderTemplate } from "@/lib/renderTemplate";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { isAllowanceCostCode, getCostCodeForItem } from "@/lib/allowanceRules";
 import { getProfileByUserId } from "@/lib/profile";
+import { COST_CODES, getCostCode } from "@/lib/constants";
 
 export const runtime = "nodejs";
 
@@ -218,22 +219,20 @@ function transformItemsToSections(jsonData: any, lineItems: any[] = [], selectio
     roomsMap.get(roomName)!.push(item);
   });
 
-  // Get trade title mapping
-  const tradeTitleMap: Record<string, string> = {
-    '201': 'DEMO',
-    '305': 'FRAMING',
-    '402': 'HVAC',
-    '404': 'PLUMBING',
-    '405': 'ELECTRICAL',
-    '520': 'WINDOWS',
-    '530': 'DOORS',
-    '640': 'CABINETS',
-    '641': 'COUNTERTOPS',
-    '950': 'TILE',
-    '960': 'FLOORING',
-    '990': 'PAINT',
-    '999': 'OTHER'
-  };
+  // Helper function to get cost code label from master list
+  function getCostCodeLabel(costCode: string): string {
+    if (!costCode) return 'OTHER';
+    
+    // First try to get from COST_CODES constant
+    const costCodeObj = getCostCode(costCode);
+    if (costCodeObj) {
+      return costCodeObj.label.toUpperCase();
+    }
+    
+    // Fallback: try to fetch from task_library if available
+    // This will be handled in the GET handler if needed
+    return 'OTHER';
+  }
 
   // Convert grouped items into sections
   const sections: any[] = [];
@@ -250,26 +249,36 @@ function transformItemsToSections(jsonData: any, lineItems: any[] = [], selectio
       
       // Each room becomes an item with subitems (atomic tasks)
       // Use label only (not text) to avoid duplicate rendering in template
+      // Include client_price with each subitem for individual pricing
       sectionItems.push({
         text: null,
         label: roomName,
-        subitems: roomItems.map((item: any) => item.description || '').filter((desc: string) => desc.trim().length > 0)
+        subitems: roomItems.map((item: any) => ({
+          description: item.description || '',
+          client_price: item.client_price || null
+        })).filter((subitem: any) => subitem.description.trim().length > 0)
       });
     });
 
     // Calculate allowance if this section is allowance-eligible
     let allowance: number | null = null;
     if (isAllowanceCostCode(costCode)) {
-      // Sum all client_price values for this section (if available)
+      // Sum all allowance_amount or client_price values for this section
+      // Prioritize allowance_amount for allowance line items
       const sectionTotal = Array.from(roomsMap.values())
         .flat()
         .reduce((sum: number, item: any) => {
+          // For allowance items, use allowance_amount if present, otherwise client_price
+          if (item.is_allowance && item.allowance_amount !== null && item.allowance_amount !== undefined) {
+            return sum + item.allowance_amount;
+          }
           return sum + (item.client_price || item.total || 0);
         }, 0);
       allowance = sectionTotal > 0 ? sectionTotal : null;
     }
 
     // FEATURE 1: Calculate scope total client price from estimate_line_items
+    // Prioritize allowance_amount for allowance items
     const matchingLineItems = lineItems.filter((item: any) => {
       const itemCostCode = item.cost_code || getCostCodeForItem(item) || '999';
       return itemCostCode === costCode;
@@ -278,6 +287,10 @@ function transformItemsToSections(jsonData: any, lineItems: any[] = [], selectio
     let scopeTotalClientPrice: number | null = null;
     if (matchingLineItems.length > 0) {
       const total = matchingLineItems.reduce((sum: number, item: any) => {
+        // For allowance items, use allowance_amount if present, otherwise client_price
+        if (item.is_allowance && item.allowance_amount !== null && item.allowance_amount !== undefined) {
+          return sum + item.allowance_amount;
+        }
         return sum + (item.client_price || 0);
       }, 0);
       scopeTotalClientPrice = total > 0 ? total : null;
@@ -320,12 +333,21 @@ function transformItemsToSections(jsonData: any, lineItems: any[] = [], selectio
       finalSubcontractor = subcontractorList.join(', ');
     }
 
+    // Check if ALL items in this cost code are allowances
+    const allItemsInSection = Array.from(roomsMap.values()).flat();
+    const allAreAllowances = allItemsInSection.length > 0 && 
+      allItemsInSection.every((item: any) => item.is_allowance === true);
+    
+    // Only show allowance in header if ALL items are allowances
+    const showAllowance = allAreAllowances ? allowance : null;
+    
     sections.push({
       code: costCode,
-      title: tradeTitleMap[costCode] || 'OTHER',
-      allowance: allowance,
+      title: getCostCodeLabel(costCode),
+      allowance: showAllowance,
       items: sectionItems,
       scope_total_client_price: scopeTotalClientPrice,
+      scope_is_allowance: allAreAllowances, // Flag to indicate if scope_total_client_price represents an allowance
       subcontractor: finalSubcontractor,
       // Selections data for template
       selections: matchingSelections.map((sel: any) => ({
@@ -336,6 +358,8 @@ function transformItemsToSections(jsonData: any, lineItems: any[] = [], selectio
         subcontractor: sel.subcontractor,
       })),
       selections_allowance_total: totalAllowance,
+      // Pass line items data for individual prices
+      lineItems: allItemsInSection,
     });
   });
 
@@ -405,12 +429,27 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
       }
 
       // Handle subitems - ensure it's always an array (even if empty)
+      // Support both string format (legacy) and object format (new with client_price)
       normalized.subitems = [];
       if (item.subitems !== null && item.subitems !== undefined) {
         if (Array.isArray(item.subitems)) {
           normalized.subitems = item.subitems
-            .map((sub: any) => String(sub).trim())
-            .filter((sub: string) => sub.length > 0);
+            .map((sub: any) => {
+              // If sub is an object with description and client_price, keep it as object
+              if (typeof sub === 'object' && sub !== null && sub.description) {
+                return {
+                  description: String(sub.description).trim(),
+                  client_price: sub.client_price || null
+                };
+              }
+              // Otherwise, treat as string (legacy format)
+              const desc = String(sub).trim();
+              if (desc.length > 0) {
+                return desc;
+              }
+              return null;
+            })
+            .filter((sub: any) => sub !== null);
         } else if (typeof item.subitems === 'string' && item.subitems.trim()) {
           normalized.subitems = [item.subitems.trim()];
         }
@@ -548,6 +587,7 @@ function normalizeSectionsForTemplate(sections: any[]): any[] {
       allowance: allowanceValue, // Only set if cost code is allowance-eligible
       items: normalizedItems,
       scope_total_client_price: section.scope_total_client_price || null,
+      scope_is_allowance: section.scope_is_allowance || false, // Flag for template to show "(Allowance)"
       subcontractor: section.subcontractor || null,
       notes: section.notes || null,
       // Selections data for template
@@ -661,7 +701,7 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       // Enhance sections with allowance calculations, scope pricing, and subcontractor detection
       sections = sections.map(section => {
         const costCode = section.code || '';
-        const shouldShowAllowance = isAllowanceCostCode(costCode);
+        const costCodeIsAllowanceEligible = isAllowanceCostCode(costCode);
         
         // Find matching items for this section
         const matchingItems = allItems.filter((item: any) => {
@@ -692,10 +732,22 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
         });
         const subcontractorList = Array.from(subcontractors);
         
+        // Check if ALL items in this section are allowances
+        const allAreAllowances = matchingItems.length > 0 && 
+          matchingItems.every((item: any) => item.is_allowance === true);
+        
+        // Only show allowance in header if ALL items are allowances AND cost code is allowance-eligible
+        const shouldShowAllowance = costCodeIsAllowanceEligible && allAreAllowances;
+        
         if (shouldShowAllowance) {
           // If allowance is not explicitly set, calculate it from matching items
+          // Prioritize allowance_amount from line items (for allowance line items)
           if (section.allowance === null || section.allowance === undefined) {
             const calculatedTotal = matchingItems.reduce((sum: number, item: any) => {
+              // For allowance items, use allowance_amount if present, otherwise client_price
+              if (item.is_allowance && item.allowance_amount !== null && item.allowance_amount !== undefined) {
+                return sum + item.allowance_amount;
+              }
               return sum + (item.client_price || item.total || 0);
             }, 0);
             
@@ -704,19 +756,34 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
             }
           }
         } else {
-          // Not allowance-eligible, ensure allowance is null
+          // Not all items are allowances or not allowance-eligible, ensure allowance is null
           section.allowance = null;
+        }
+        
+        // Update section title to use proper cost code label
+        if (section.code) {
+          const costCodeObj = getCostCode(section.code);
+          if (costCodeObj) {
+            section.title = costCodeObj.label.toUpperCase();
+          }
         }
 
         // FEATURE 1: Calculate scope total client price from estimate_line_items
+        // Prioritize allowance_amount for allowance items
         let scopeTotalClientPrice: number | null = null;
         if (matchingItems.length > 0) {
           const total = matchingItems.reduce((sum: number, item: any) => {
+            // For allowance items, use allowance_amount if present, otherwise client_price
+            if (item.is_allowance && item.allowance_amount !== null && item.allowance_amount !== undefined) {
+              return sum + item.allowance_amount;
+            }
             return sum + (item.client_price || 0);
           }, 0);
           scopeTotalClientPrice = total > 0 ? total : null;
         }
         section.scope_total_client_price = scopeTotalClientPrice;
+        // Mark if scope_total_client_price represents an allowance (all items are allowances)
+        section.scope_is_allowance = allAreAllowances;
 
         // FEATURE 2: Detect subcontractor from line item descriptions
         // Collect all descriptions from this section's items
@@ -724,9 +791,12 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
         if (section.items && Array.isArray(section.items)) {
           section.items.forEach((item: any) => {
             if (item.subitems && Array.isArray(item.subitems)) {
-              item.subitems.forEach((subitem: string) => {
-                if (subitem && typeof subitem === 'string') {
+              item.subitems.forEach((subitem: any) => {
+                // Handle both string format (legacy) and object format (new)
+                if (typeof subitem === 'string' && subitem) {
                   allSectionDescriptions.push(subitem);
+                } else if (subitem && typeof subitem === 'object' && subitem.description) {
+                  allSectionDescriptions.push(subitem.description);
                 }
               });
             }
@@ -770,14 +840,54 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
         
         // IMPORTANT: Add new line items to existing sections if they match the cost code
         // This ensures manually added items appear in the spec sheet
+        // Also enhance existing subitems with client_price from matching line items
         if (matchingItems.length > 0 && section.items && Array.isArray(section.items)) {
-          // Get all descriptions already in the section
+          // Create a map of description -> client_price for quick lookup
+          const descriptionToPrice = new Map<string, number>();
+          matchingItems.forEach((item: any) => {
+            if (item.description && typeof item.description === 'string' && item.client_price) {
+              descriptionToPrice.set(item.description.trim().toLowerCase(), item.client_price);
+            }
+          });
+          
+          // Enhance existing subitems with prices and convert strings to objects
+          section.items.forEach((roomItem: any) => {
+            if (roomItem.subitems && Array.isArray(roomItem.subitems)) {
+              roomItem.subitems = roomItem.subitems.map((subitem: any) => {
+                // If it's already an object, just ensure it has client_price
+                if (typeof subitem === 'object' && subitem !== null && subitem.description) {
+                  const descKey = subitem.description.trim().toLowerCase();
+                  if (!subitem.client_price && descriptionToPrice.has(descKey)) {
+                    return {
+                      ...subitem,
+                      client_price: descriptionToPrice.get(descKey)!
+                    };
+                  }
+                  return subitem;
+                }
+                // If it's a string, convert to object and add price if found
+                if (typeof subitem === 'string' && subitem.trim()) {
+                  const descKey = subitem.trim().toLowerCase();
+                  return {
+                    description: subitem.trim(),
+                    client_price: descriptionToPrice.get(descKey) || null
+                  };
+                }
+                return subitem;
+              });
+            }
+          });
+          
+          // Get all descriptions already in the section (after conversion)
           const existingDescriptions = new Set<string>();
           section.items.forEach((item: any) => {
             if (item.subitems && Array.isArray(item.subitems)) {
-              item.subitems.forEach((subitem: string) => {
-                if (subitem && typeof subitem === 'string') {
-                  existingDescriptions.add(subitem.trim());
+              item.subitems.forEach((subitem: any) => {
+                // Handle both string format (legacy) and object format (new)
+                if (typeof subitem === 'string' && subitem) {
+                  existingDescriptions.add(subitem.trim().toLowerCase());
+                } else if (subitem && typeof subitem === 'object' && subitem.description) {
+                  existingDescriptions.add(subitem.description.trim().toLowerCase());
                 }
               });
             }
@@ -817,12 +927,17 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
             }
             
             // Add descriptions from matching items that aren't already in the section
+            // Include client_price for individual pricing display
             roomItems.forEach((item: any) => {
               if (item.description && typeof item.description === 'string') {
                 const desc = item.description.trim();
-                if (desc && !existingDescriptions.has(desc)) {
-                  roomItem.subitems.push(desc);
-                  existingDescriptions.add(desc);
+                const descKey = desc.toLowerCase();
+                if (!existingDescriptions.has(descKey)) {
+                  roomItem.subitems.push({
+                    description: desc,
+                    client_price: item.client_price || null
+                  });
+                  existingDescriptions.add(descKey);
                 }
               }
             });
@@ -871,6 +986,11 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       console.log('[PDF] First section items count:', sections[0].items.length);
     }
 
+    // Try to get company logo from profile (check both possible field names)
+    const companyLogoUrl = (estimatorProfile as any)?.company_logo_url || 
+                          (estimatorProfile as any)?.logo_url || 
+                          null;
+
     const template = loadTemplate("estimatix-spec-sheet.html");
     const html = renderTemplate(template, {
       owner_name: project?.owner_name || estimate.client_name || 'N/A',
@@ -881,6 +1001,7 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
       sections: sections,
       estimator_name: estimatorProfile?.full_name || null,
       estimator_company: estimatorProfile?.company_name || null,
+      company_logo_url: companyLogoUrl,
     });
     
     console.log('[PDF] Rendered HTML length:', html.length);

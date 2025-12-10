@@ -203,7 +203,13 @@
           {{#if subitems.length}}
           <ul>
             {{#each subitems}}
-              <li>{{this}}</li>
+              <li>
+                {{#if this.description}}
+                  {{this.description}}{{#if this.client_price}} ({{formatCurrency this.client_price}}){{/if}}
+                {{else}}
+                  {{this}}
+                {{/if}}
+              </li>
             {{/each}}
           </ul>
           {{/if}}
@@ -218,7 +224,13 @@
         {{#if subitems.length}}
         <ul>
           {{#each subitems}}
-          <li>{{this}}</li>
+          <li>
+            {{#if this.description}}
+              {{this.description}}{{#if this.client_price}} ({{formatCurrency this.client_price}}){{/if}}
+            {{else}}
+              {{this}}
+            {{/if}}
+          </li>
           {{/each}}
         </ul>
         {{/if}}

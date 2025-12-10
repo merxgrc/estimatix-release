@@ -327,6 +327,41 @@ export interface Database {
           }
         ]
       }
+      chat_messages: {
+        Row: {
+          id: string
+          project_id: string
+          role: 'user' | 'assistant' | 'system'
+          content: string
+          related_action: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          role: 'user' | 'assistant' | 'system'
+          content: string
+          related_action?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          role?: 'user' | 'assistant' | 'system'
+          content?: string
+          related_action?: string | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_messages_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -368,6 +403,10 @@ export type EstimateLineItemUpdate = Database['public']['Tables']['estimate_line
 export type Selection = Database['public']['Tables']['selections']['Row']
 export type SelectionInsert = Database['public']['Tables']['selections']['Insert']
 export type SelectionUpdate = Database['public']['Tables']['selections']['Update']
+
+export type ChatMessage = Database['public']['Tables']['chat_messages']['Row']
+export type ChatMessageInsert = Database['public']['Tables']['chat_messages']['Insert']
+export type ChatMessageUpdate = Database['public']['Tables']['chat_messages']['Update']
 
 // Extended EstimateLineItem interface supporting new pricing model
 export interface EstimateLineItem {

@@ -64,11 +64,12 @@ export async function getProfileByUserId(userId: string): Promise<Profile | null
     .from('profiles')
     .select('*')
     .eq('id', userId)
-    .single()
+    .maybeSingle()
 
   if (error) {
+    // PGRST116 is "not found" which is expected, just return null
     if (error.code === 'PGRST116') {
-      return null // Profile doesn't exist
+      return null
     }
     console.error('Error fetching profile:', error)
     return null

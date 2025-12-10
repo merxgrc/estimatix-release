@@ -279,7 +279,7 @@ export function SmartRoomInput({
           onBlur={handleInputBlur}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          className="w-full pr-8"
+          className="h-7 w-full pr-8 text-xs"
         />
         <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
           <ChevronDown className={cn(

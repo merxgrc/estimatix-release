@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Sidebar } from "@/components/sidebar"
 import { Recorder } from "@/components/voice/Recorder"
 import { EstimateTable } from "@/components/estimate/EstimateTable"
+import { EstimateChat } from "@/components/estimate/EstimateChat"
 import { UserMenu } from "@/components/user-menu"
 import { AuthGuard } from "@/components/auth-guard"
 import { useAuth } from "@/lib/auth-context"
@@ -322,7 +323,7 @@ export default function RecordPage() {
               </div>
             </div>
 
-            {/* Recording Step */}
+            {/* Recording Step - Now shows Chat Interface */}
             {currentStep === 'record' && (
               <div className="space-y-4">
                 {isCreatingProject && (
@@ -335,9 +336,35 @@ export default function RecordPage() {
                     </CardContent>
                   </Card>
                 )}
-                <Recorder 
-                  onRecordingComplete={handleRecordingComplete}
-                />
+                
+                {/* Chat Interface for adding/modifying estimates */}
+                {projectId && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Estimate Chat</CardTitle>
+                      <CardDescription>
+                        Describe your project or add/modify line items. Use the microphone to record or type directly.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="h-[600px]">
+                        <EstimateChat
+                          projectId={projectId}
+                          estimateId={estimateId}
+                          onEstimateUpdate={(newEstimateId, newData) => {
+                            setEstimateId(newEstimateId)
+                            setEstimateData(newData)
+                            setCurrentStep('estimate')
+                          }}
+                          onLineItemClick={(lineItemId) => {
+                            // Scroll to line item in estimate table
+                            console.log('Line item clicked:', lineItemId)
+                          }}
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
               </div>
             )}
 
@@ -420,14 +447,14 @@ export default function RecordPage() {
               </Card>
             )}
 
-            {/* Estimate Step */}
+            {/* Estimate Step - Now uses Chat Interface */}
             {currentStep === 'estimate' && estimateData && (
               <div className="space-y-6">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div>
                     <h2 className="text-2xl font-bold">Project Estimate</h2>
                     <p className="text-muted-foreground">
-                      Review and edit the AI-generated line items
+                      Review and edit the AI-generated line items. Use the chat to add or modify items.
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -440,18 +467,51 @@ export default function RecordPage() {
                   </div>
                 </div>
 
-                <EstimateTable
-                  projectId={null}
-                  initialData={estimateData}
-                  onSave={handleEstimateSave}
-                  estimateId={estimateId}
-                  projectMetadata={{
-                    projectName: projectInfo.projectName,
-                    clientName: projectInfo.clientName,
-                    clientAddress: projectInfo.clientAddress,
-                    projectDescription: projectInfo.projectDescription,
-                  }}
-                />
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Chat Panel */}
+                  <Card className="lg:col-span-1">
+                    <CardHeader>
+                      <CardTitle>Estimate Chat</CardTitle>
+                      <CardDescription>
+                        Describe changes or additions to your estimate
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="h-[600px]">
+                        <EstimateChat
+                          projectId={projectId!}
+                          estimateId={estimateId}
+                          onEstimateUpdate={(newEstimateId, newData) => {
+                            setEstimateId(newEstimateId)
+                            setEstimateData(newData)
+                            // Reload estimate table
+                          }}
+                          onLineItemClick={(lineItemId) => {
+                            // Scroll to line item in estimate table
+                            // TODO: Implement scroll to line item
+                            console.log('Line item clicked:', lineItemId)
+                          }}
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Estimate Table */}
+                  <div className="lg:col-span-1">
+                    <EstimateTable
+                      projectId={projectId}
+                      initialData={estimateData}
+                      onSave={handleEstimateSave}
+                      estimateId={estimateId}
+                      projectMetadata={{
+                        projectName: projectInfo.projectName,
+                        clientName: projectInfo.clientName,
+                        clientAddress: projectInfo.clientAddress,
+                        projectDescription: projectInfo.projectDescription,
+                      }}
+                    />
+                  </div>
+                </div>
               </div>
             )}
           </main>

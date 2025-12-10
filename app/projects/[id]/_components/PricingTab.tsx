@@ -12,23 +12,7 @@ import { supabase } from "@/lib/supabase/client"
 import { useAuth } from "@/lib/auth-context"
 import { Sparkles, AlertTriangle, CheckCircle2, Circle, Save, DollarSign } from "lucide-react"
 import { toast } from 'sonner'
-
-// Cost code categories for display
-const COST_CATEGORIES = [
-  { label: "Demo (201)", code: "201" },
-  { label: "Framing (305)", code: "305" },
-  { label: "Plumbing (404)", code: "404" },
-  { label: "Electrical (405)", code: "405" },
-  { label: "HVAC (402)", code: "402" },
-  { label: "Windows (520)", code: "520" },
-  { label: "Doors (530)", code: "530" },
-  { label: "Cabinets (640)", code: "640" },
-  { label: "Countertops (641)", code: "641" },
-  { label: "Tile (950)", code: "950" },
-  { label: "Flooring (960)", code: "960" },
-  { label: "Paint (990)", code: "990" },
-  { label: "Other (999)", code: "999" }
-]
+import { COST_CATEGORIES, getCostCode } from '@/lib/constants'
 
 interface LineItem {
   id: string
@@ -83,11 +67,14 @@ interface PricingTabProps {
 }
 
 // Group by scope (category) then room
+// IMPORTANT: Include ALL items, even if cost_code is null or pricing fields are null
 function groupByScopeThenRoom(items: LineItem[]) {
   const byScope: Record<string, Record<string, LineItem[]>> = {}
   
   items.forEach(item => {
-    const scope = item.category || item.cost_code || "Other"
+    // Use "Unassigned" for items without cost_code or category
+    // This ensures all items are shown, including newly created ones
+    const scope = item.category || item.cost_code || "Unassigned"
     const room = item.room_name || "General"
     
     if (!byScope[scope]) {
@@ -410,6 +397,9 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
 
   // Get scope label
   const getScopeLabel = (scope: string) => {
+    if (scope === "Unassigned") {
+      return "Unassigned (No Cost Code)"
+    }
     const category = COST_CATEGORIES.find(c => c.code === scope || c.label === scope)
     return category?.label || scope
   }
@@ -558,35 +548,47 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
                                     <div>
                                       <div className="text-xs text-muted-foreground">Unit Cost</div>
                                       <div className="font-medium">
-                                        ${unitCost.toFixed(2)}
+                                        {item.unit_total_cost !== null && item.unit_total_cost !== undefined
+                                          ? `$${unitCost.toFixed(2)}`
+                                          : item.direct_cost !== null && item.direct_cost !== undefined
+                                          ? `$${unitCost.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
                                       </div>
                                     </div>
 
                                     <div>
                                       <div className="text-xs text-muted-foreground">Labor</div>
                                       <div className="font-medium text-sm">
-                                        ${(item.labor_cost || 0).toFixed(2)}
+                                        {item.labor_cost !== null && item.labor_cost !== undefined
+                                          ? `$${item.labor_cost.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
                                       </div>
                                     </div>
 
                                     <div>
                                       <div className="text-xs text-muted-foreground">Material</div>
                                       <div className="font-medium text-sm">
-                                        ${(item.material_cost || 0).toFixed(2)}
+                                        {item.material_cost !== null && item.material_cost !== undefined
+                                          ? `$${item.material_cost.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
                                       </div>
                                     </div>
 
                                     <div>
                                       <div className="text-xs text-muted-foreground">OH</div>
                                       <div className="font-medium text-sm">
-                                        ${(item.overhead_cost || 0).toFixed(2)}
+                                        {item.overhead_cost !== null && item.overhead_cost !== undefined
+                                          ? `$${item.overhead_cost.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
                                       </div>
                                     </div>
 
                                     <div>
                                       <div className="text-xs text-muted-foreground">Direct Cost</div>
                                       <div className="font-medium">
-                                        ${(item.direct_cost || 0).toFixed(2)}
+                                        {item.direct_cost !== null && item.direct_cost !== undefined
+                                          ? `$${item.direct_cost.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
                                       </div>
                                     </div>
                                   </div>
@@ -613,7 +615,9 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
                                     <div>
                                       <div className="text-xs text-muted-foreground">Client Price</div>
                                       <div className="font-bold text-lg text-green-700">
-                                        ${(item.client_price || 0).toFixed(2)}
+                                        {item.client_price !== null && item.client_price !== undefined
+                                          ? `$${item.client_price.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
                                       </div>
                                     </div>
 
@@ -768,14 +772,12 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
                     <div className="font-semibold text-sm">
                       {group.scopeLabel}
                     </div>
-                    {group.totalAllowance > 0 && (
-                      <div className="text-sm font-semibold">
-                        Allowance:{' '}
-                        <span className="tabular-nums">
-                          {formatCurrency(group.totalAllowance)}
-                        </span>
-                      </div>
-                    )}
+                    <div className="text-sm font-semibold">
+                      Allowance:{' '}
+                      <span className="tabular-nums">
+                        {formatCurrency(group.totalAllowance)}
+                      </span>
+                    </div>
                   </div>
                   <div className="text-xs text-muted-foreground space-y-1">
                     {group.selections.map(sel => (
@@ -783,7 +785,7 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
                         <span className="font-medium">
                           {sel.room || sel.category || ''}{sel.room || sel.category ? ':' : ''}
                         </span>
-                        <span>{sel.title || sel.description || 'Untitled Selection'}</span>
+                        <span>{sel.title || sel.description || ''}</span>
                         {sel.subcontractor && (
                           <span className="italic text-[11px] ml-1">
                             (Sub: {sel.subcontractor})

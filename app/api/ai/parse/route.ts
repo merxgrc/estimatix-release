@@ -6,6 +6,18 @@ import { requireAuth } from '@/lib/supabase/server'
 
 export const runtime = 'nodejs' // Disable Edge runtime for OpenAI API compatibility
 
+// Allowance keywords for determining if cost_code 999 should be assigned
+const ALLOWANCE_KEYWORDS = ['allowance', 'budget', 'finish package', '$', 'fixture package']
+
+/**
+ * Check if description contains allowance keywords (case-insensitive)
+ */
+function containsAllowanceKeywords(description: string): boolean {
+  if (!description || typeof description !== 'string') return false
+  const lowerDesc = description.toLowerCase()
+  return ALLOWANCE_KEYWORDS.some(keyword => lowerDesc.includes(keyword.toLowerCase()))
+}
+
 // Zod schema for spec sections
 const SpecItemSchema = z.object({
   text: z.string().nullable(),
@@ -26,6 +38,7 @@ const SpecSectionSchema = z.object({
 // NOTE: line_items will now ALWAYS be structured objects with atomic tasks.
 // Each described task becomes its own line item.
 // AI sets labor_cost, margin_percent, client_price to null (user fills these in UI).
+// EXCEPTION: For allowance items, client_price = allowance_amount automatically.
 const StructuredLineItemSchema = z.object({
   description: z.string(),
   category: z.string().optional(),
@@ -45,6 +58,12 @@ const StructuredLineItemSchema = z.object({
   confidence: z.number().optional(),
 
   notes: z.string().optional(),
+
+  // Allowance fields (for allowance line items)
+  is_allowance: z.boolean().default(false),
+  allowance_amount: z.number().nullable().optional(),
+  subcontractor: z.string().nullable().optional(),
+  allowance_notes: z.string().optional(),
 
   // Legacy fields for backward compatibility
   labor_cost: z.number().nullable().optional(),
@@ -78,9 +97,9 @@ type SelectionClassification = z.infer<typeof SelectionClassificationSchema>
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { transcript, projectId } = body
+    const { transcript, projectId, estimateId } = body
     
-    console.log('AI Parse API called with:', { projectId, transcriptLength: transcript?.length })
+    console.log('AI Parse API called with:', { projectId, estimateId, transcriptLength: transcript?.length })
     
     // Get user for selection creation (needed for ownership verification)
     const user = await requireAuth()
@@ -123,6 +142,10 @@ export async function POST(req: NextRequest) {
       throw new Error('AI returned invalid projectId. Cannot save estimate.')
     }
 
+    // If estimateId is provided, we're modifying an existing estimate
+    // Otherwise, create a new estimate
+    const isModifyingExisting = estimateId && typeof estimateId === 'string'
+
     // Normalize allowances (convert string "$5000" to number 5000)
     const normalizedSections = normalizeAllowances(parseResult.spec_sections)
     
@@ -134,35 +157,82 @@ export async function POST(req: NextRequest) {
     // Store result in estimates table
     const supabase = await createServerClient()
     
-    // First, check if an estimate already exists for this project
-    const { data: existingEstimate, error: checkError } = await supabase
-      .from('estimates')
-      .select('id')
-      .eq('project_id', projectId)
-      .maybeSingle()
-
-    if (checkError && checkError.code !== 'PGRST116') {
-      console.error('Error checking existing estimate:', checkError)
-      return NextResponse.json(
-        { error: `Failed to check existing estimate: ${checkError.message}` },
-        { status: 500 }
-      )
+    // Check if estimate already exists for this project
+    // If estimateId is provided, use it; otherwise check for existing estimate
+    let existingEstimate = null
+    if (isModifyingExisting) {
+      const { data, error } = await supabase
+        .from('estimates')
+        .select('id')
+        .eq('id', estimateId)
+        .single()
+      
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error checking existing estimate:', error)
+        return NextResponse.json(
+          { error: `Failed to check existing estimate: ${error.message}` },
+          { status: 500 }
+        )
+      }
+      
+      if (data) {
+        existingEstimate = data
+      }
+    } else {
+      const { data, error: checkError } = await supabase
+        .from('estimates')
+        .select('id')
+        .eq('project_id', projectId)
+        .maybeSingle()
+      
+      if (checkError && checkError.code !== 'PGRST116') {
+        console.error('Error checking existing estimate:', checkError)
+        return NextResponse.json(
+          { error: `Failed to check existing estimate: ${checkError.message}` },
+          { status: 500 }
+        )
+      }
+      
+      existingEstimate = data
     }
 
     // Process line items - all items are now atomic structured objects
     const processedItems = parseResult.line_items.map((item) => {
       // All line items are structured objects (enforced by schema)
       if (typeof item === 'object' && item !== null) {
+        const description = item.description || ''
+        const isAllowance = item.is_allowance === true
+        
+        // Only assign cost_code='999' if:
+        // 1. cost_code is already provided (preserve it)
+        // 2. OR description contains allowance keywords (for non-allowance items)
+        // Otherwise, leave cost_code as null/undefined (don't force 999)
+        let costCode = item.cost_code
+        if (!costCode && !isAllowance && containsAllowanceKeywords(description)) {
+          costCode = '999'
+        }
+        
+        // For allowance items: set client_price = allowance_amount automatically
+        // Skip pricing engine for allowances
+        let clientPrice = item.client_price ?? 0
+        if (isAllowance && item.allowance_amount !== null && item.allowance_amount !== undefined) {
+          clientPrice = item.allowance_amount
+        }
+        
         return {
           category: item.category || 'Other',
-          description: item.description || '',
-          cost_code: item.cost_code || '999',
+          description: description,
+          cost_code: costCode || null, // Don't force 999 if no allowance keywords
           room_name: item.room || 'General', // Default to 'General' if not detected
           quantity: item.quantity ?? 1, // Default to 1 if not provided
           unit: item.unit || 'EA', // Default to 'EA' if not provided
-          labor_cost: item.labor_cost ?? 0, // Default to 0 if null
-          margin_percent: item.margin_percent ?? 0, // Default to 0 if null
-          client_price: item.client_price ?? 0, // Default to 0 if null
+          labor_cost: isAllowance ? null : (item.labor_cost ?? 0), // Allowances don't use labor_cost
+          margin_percent: isAllowance ? null : (item.margin_percent ?? 0), // Allowances don't use margin
+          client_price: clientPrice,
+          is_allowance: isAllowance,
+          allowance_amount: isAllowance ? (item.allowance_amount ?? null) : null,
+          subcontractor: isAllowance ? (item.subcontractor ?? null) : null,
+          allowance_notes: isAllowance ? (item.allowance_notes ?? null) : null,
           notes: item.notes || null
         }
       }
@@ -170,13 +240,14 @@ export async function POST(req: NextRequest) {
       return {
         category: 'Other',
         description: '',
-        cost_code: '999',
+        cost_code: null, // Don't force 999 in fallback
         room_name: 'General',
         quantity: 1,
         unit: 'EA',
         labor_cost: 0,
         margin_percent: 0,
         client_price: 0,
+        is_allowance: false,
         notes: null
       }
     })
@@ -199,7 +270,7 @@ export async function POST(req: NextRequest) {
       total: calculatedTotal || 0
     }
 
-    let estimateId: string
+    let finalEstimateId: string
 
     if (existingEstimate) {
       console.log('Saving to estimate:', existingEstimate.id)
@@ -226,7 +297,7 @@ export async function POST(req: NextRequest) {
       }
 
       console.log('Supabase update done')
-      estimateId = updatedEstimate.id
+      finalEstimateId = updatedEstimate.id
     } else {
       console.log('Creating new estimate for project:', projectId)
       
@@ -246,30 +317,39 @@ export async function POST(req: NextRequest) {
       }
 
       console.log('Supabase insert done')
-      estimateId = newEstimate.id
+      finalEstimateId = newEstimate.id
     }
 
     // Save line items to estimate_line_items table
     if (processedItems.length > 0) {
-      // Delete existing line items for this estimate
-      await supabase
-        .from('estimate_line_items')
-        .delete()
-        .eq('estimate_id', estimateId)
+      // Delete existing line items for this estimate (only if creating new estimate, not modifying)
+      // When modifying, we append new items instead of replacing
+      if (!isModifyingExisting) {
+        await supabase
+          .from('estimate_line_items')
+          .delete()
+          .eq('estimate_id', finalEstimateId)
+      }
 
       // Insert new atomic line items
+      // Preserve cost_code if provided, otherwise use null (don't force 999)
+      // Include is_allowance flag and allowance fields for allowance items
       const lineItemsToInsert = processedItems.map(item => ({
-        estimate_id: estimateId,
+        estimate_id: finalEstimateId,
         project_id: projectId,
         room_name: item.room_name,
         description: item.description,
         category: item.category,
-        cost_code: item.cost_code,
+        cost_code: item.cost_code || null, // Don't force 999 - preserve null if not set
         quantity: item.quantity,
         unit: item.unit,
         labor_cost: item.labor_cost,
         margin_percent: item.margin_percent,
-        client_price: item.client_price
+        client_price: item.client_price,
+        is_allowance: item.is_allowance || false, // Include is_allowance flag
+        allowance_amount: item.is_allowance ? (item.allowance_amount || null) : null,
+        subcontractor: item.is_allowance ? (item.subcontractor || null) : null,
+        allowance_notes: item.is_allowance ? (item.allowance_notes || null) : null
       }))
 
       const { data: insertedLineItems, error: lineItemsError } = await supabase
@@ -285,16 +365,20 @@ export async function POST(req: NextRequest) {
         
         // AI-assisted selection detection (non-blocking)
         // Process each line item to detect if it's a selection
+        // SKIP allowance items - they don't go through selection detection
         if (insertedLineItems && insertedLineItems.length > 0) {
-          await detectAndCreateSelections(
-            insertedLineItems,
-            estimateId,
-            user.id,
-            openaiApiKey
-          ).catch((err) => {
-            // Log but don't fail - selection detection is additive
-            console.warn('Selection detection failed (non-blocking):', err)
-          })
+          const nonAllowanceItems = insertedLineItems.filter(item => !item.is_allowance)
+          if (nonAllowanceItems.length > 0) {
+            await detectAndCreateSelections(
+              nonAllowanceItems,
+              finalEstimateId,
+              user.id,
+              openaiApiKey
+            ).catch((err) => {
+              // Log but don't fail - selection detection is additive
+              console.warn('Selection detection failed (non-blocking):', err)
+            })
+          }
         }
       }
     }
@@ -318,7 +402,7 @@ export async function POST(req: NextRequest) {
         assumptions: parseResult.assumptions || [],
         missing_info: parseResult.missing_info || []
       },
-      estimateId: estimateId
+      estimateId: finalEstimateId
     })
 
   } catch (error) {
@@ -557,29 +641,52 @@ function sanitizeLineItems(lineItems: any[] = []): Array<Record<string, any>> {
       return {
         description: typeof item === 'string' ? item : '',
         category: 'Other' as const,
-        cost_code: '999',
+        cost_code: null, // Don't force 999 in fallback
         room: 'General',
         labor_cost: null,
         margin_percent: null,
         client_price: null,
-        notes: ''
+        notes: '',
+        is_allowance: false
       }
     }
 
-    const trade = matchTradeFromText(item.category || item.cost_code || item.description || '')
+    const description = item.description ? String(item.description) : ''
+    const isAllowance = item.is_allowance === true
+    const trade = matchTradeFromText(item.category || item.cost_code || description || '')
     const laborCost = parseNumericValue(item.labor_cost)
     const marginPercent = parseNumericValue(item.margin_percent)
-    const clientPrice = parseNumericValue(item.client_price)
+    // For allowance items, use allowance_amount as client_price if provided
+    const clientPrice = isAllowance && item.allowance_amount !== null && item.allowance_amount !== undefined
+      ? parseNumericValue(item.allowance_amount)
+      : parseNumericValue(item.client_price)
+
+    // Preserve cost_code if provided, otherwise:
+    // - Use trade.code if it's not '999'
+    // - Only use '999' if description contains allowance keywords (for non-allowance items)
+    let costCode = item.cost_code
+    if (!costCode) {
+      if (trade.code !== '999') {
+        costCode = trade.code
+      } else if (!isAllowance && containsAllowanceKeywords(description)) {
+        costCode = '999'
+      } else {
+        costCode = null // Don't force 999
+      }
+    }
 
     return {
-      description: item.description ? String(item.description) : trade.title,
+      description: description || trade.title,
       category: trade.category,
-      cost_code: item.cost_code || trade.code,
+      cost_code: costCode,
       room: item.room || item.room_name || 'General',
-      labor_cost: laborCost,
-      margin_percent: marginPercent,
+      labor_cost: isAllowance ? null : laborCost, // Allowances don't use labor_cost
+      margin_percent: isAllowance ? null : marginPercent, // Allowances don't use margin
       client_price: clientPrice,
-      notes: item.notes ? String(item.notes) : '',
+      notes: item.notes || item.allowance_notes ? String(item.notes || item.allowance_notes) : '',
+      is_allowance: isAllowance,
+      allowance_amount: isAllowance ? parseNumericValue(item.allowance_amount) : null,
+      subcontractor: isAllowance ? (item.subcontractor ? String(item.subcontractor) : null) : null
     }
   })
 }
@@ -617,8 +724,55 @@ async function parseTranscriptWithAI(
 ): Promise<ParseResult> {
   const prompt = `You are a senior construction estimator. Parse the contractor transcript into precise JSON that matches ParseResultSchema exactly. Do not change field names or structure.
 
-CORE BEHAVIOR (STRICT) — ATOMIC LINE ITEMS ONLY
-1. ATOMIC TASK RULE — MOST IMPORTANT:
+CORE BEHAVIOR (STRICT) — ATOMIC LINE ITEMS WITH ALLOWANCE EXCEPTION
+
+1. ALLOWANCE DETECTION RULE — HIGHEST PRIORITY:
+   If the user input contains allowance patterns, create ONLY ONE line item (do NOT split):
+   
+   Allowance patterns to detect:
+   - "allowance is [amount]"
+   - "allowance of [amount]"
+   - "budget [amount]" or "budget of [amount]"
+   - "$[number]" followed by allowance context
+   - "[something] allowance" (e.g., "fireplace allowance", "tile allowance")
+   - Phrases like "subcontractor will be X" or "done by X" combined with dollar amounts
+   
+   When allowance patterns are detected:
+   - Create ONLY ONE line item (do NOT split into multiple items)
+   - Set is_allowance: true
+   - Extract allowance_amount from text (numeric value, no "$" or commas)
+   - Extract subcontractor if mentioned (e.g., "subcontractor will be ABC Company", "done by XYZ")
+   - Set description to the entire scope paragraph (preserve full context)
+   - Set quantity: 1, unit: "EA"
+   - Detect room normally
+   - Assign cost_code based on content (fireplace → appropriate code, framing → 305, etc.)
+   - Set client_price: allowance_amount (automatically, skip pricing engine)
+   - Set labor_cost: null, margin_percent: null (allowances don't use these)
+   - Set allowance_notes: any additional context about the allowance
+   
+   Example:
+   Transcript: "Fireplace allowance is $18,000. Subcontractor will be Pacific Hearth & Home. This includes the fireplace unit, installation, and all related work."
+   
+   Create ONE line item:
+   {
+     "description": "Fireplace allowance is $18,000. Subcontractor will be Pacific Hearth & Home. This includes the fireplace unit, installation, and all related work.",
+     "is_allowance": true,
+     "allowance_amount": 18000,
+     "subcontractor": "Pacific Hearth & Home",
+     "cost_code": "520", // or appropriate code for fireplace
+     "room": "Family Room", // if mentioned, else "General"
+     "quantity": 1,
+     "unit": "EA",
+     "client_price": 18000,
+     "labor_cost": null,
+     "margin_percent": null,
+     "allowance_notes": "Includes fireplace unit, installation, and all related work"
+   }
+   
+   DO NOT split this into multiple line items.
+
+2. ATOMIC TASK RULE — FOR NON-ALLOWANCE ITEMS:
+   If NO allowance patterns are detected, then:
    EVERY described task MUST become its own separate line item. Never group multiple tasks into one line item.
    
    Example:
@@ -656,14 +810,30 @@ CORE BEHAVIOR (STRICT) — ATOMIC LINE ITEMS ONLY
    - DO NOT attempt to assign costs unless explicitly stated in transcript.
 
 5. Line Item Format (required for each object):
-   description: atomic action only (e.g., "Remove upper cabinets", not "Remove upper and lower cabinets")
-   category: one of: Windows, Doors, Cabinets, Flooring, Plumbing, Electrical, HVAC, Demo, Framing, Paint, Countertops, Tile, Other
-   cost_code: string matching category (see mapping)
-   room: detected room name or "General"
-   labor_cost: null
-   margin_percent: null
-   client_price: null
-   notes: optional clarification
+   For NON-ALLOWANCE items:
+   - description: atomic action only (e.g., "Remove upper cabinets", not "Remove upper and lower cabinets")
+   - category: one of: Windows, Doors, Cabinets, Flooring, Plumbing, Electrical, HVAC, Demo, Framing, Paint, Countertops, Tile, Other
+   - cost_code: string matching category (see mapping)
+   - room: detected room name or "General"
+   - labor_cost: null
+   - margin_percent: null
+   - client_price: null
+   - is_allowance: false (or omit)
+   - notes: optional clarification
+   
+   For ALLOWANCE items:
+   - description: full scope paragraph (preserve entire context)
+   - is_allowance: true
+   - allowance_amount: numeric value extracted from text (no "$" or commas)
+   - subcontractor: extracted if mentioned (e.g., "Pacific Hearth & Home")
+   - allowance_notes: optional additional context
+   - cost_code: based on content (fireplace, framing, etc.)
+   - room: detected room name or "General"
+   - quantity: 1
+   - unit: "EA"
+   - client_price: allowance_amount (set automatically)
+   - labor_cost: null
+   - margin_percent: null
 
 CATEGORY + COST CODE MAPPING:
 - Demo / demolition → category "Demo", cost_code "201"
@@ -711,8 +881,8 @@ Then spec_section for DEMO 201 should have:
     "code": "201",
     "title": "DEMO",
     "allowance": null,
-    "items": [
-      { 
+  "items": [
+    {
         "text": "Kitchen", 
         "label": "Kitchen",
         "subitems": [
@@ -738,7 +908,7 @@ Return strictly:
   "missing_info": [...]
 }
 
-Example line_items output:
+Example line_items output (non-allowance):
 "line_items": [
   {
     "description": "Remove upper cabinets",
@@ -747,7 +917,8 @@ Example line_items output:
     "room": "Kitchen",
     "labor_cost": null,
     "margin_percent": null,
-    "client_price": null
+    "client_price": null,
+    "is_allowance": false
   },
   {
     "description": "Remove lower cabinets",
@@ -756,7 +927,26 @@ Example line_items output:
     "room": "Kitchen",
     "labor_cost": null,
     "margin_percent": null,
-    "client_price": null
+    "client_price": null,
+    "is_allowance": false
+  }
+]
+
+Example line_items output (allowance):
+"line_items": [
+  {
+    "description": "Fireplace allowance is $18,000. Subcontractor will be Pacific Hearth & Home. This includes the fireplace unit, installation, and all related work.",
+    "is_allowance": true,
+    "allowance_amount": 18000,
+    "subcontractor": "Pacific Hearth & Home",
+    "cost_code": "520",
+    "room": "Family Room",
+    "quantity": 1,
+    "unit": "EA",
+    "client_price": 18000,
+    "labor_cost": null,
+    "margin_percent": null,
+    "allowance_notes": "Includes fireplace unit, installation, and all related work"
   }
 ]
 
@@ -779,17 +969,17 @@ ${transcript}`
         await new Promise(resolve => setTimeout(resolve, delayMs))
       }
 
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
               content: [
                 'You are Estimatix\'s parsing engine, a senior construction estimator AI.',
                 'Your job is to convert contractor speech into STRICTLY structured JSON that matches ParseResultSchema exactly.',
@@ -807,13 +997,13 @@ ${transcript}`
                 '',
                 'You must obey the user prompt exactly. If any conflict exists, prefer the user prompt.'
               ].join('\n')
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          temperature: 0.1, // Low temperature for consistent, structured output
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.1, // Low temperature for consistent, structured output
           max_tokens: 4000,
           response_format: { type: 'json_object' }
         })
@@ -866,34 +1056,45 @@ ${transcript}`
             ? item.category 
             : 'Other' as const
 
+          const isAllowance = item.is_allowance === true
+
           if (item && typeof item === 'object') {
+            // For allowance items, use allowance_amount as client_price
+            const clientPrice = isAllowance && item.allowance_amount !== null && item.allowance_amount !== undefined
+              ? item.allowance_amount
+              : (item.client_price ?? null)
+
             return {
               description: item.description || '',
+              is_allowance: isAllowance,
               category: validCategory,
-              cost_code: item.cost_code || '999',
+              cost_code: item.cost_code || null,
               room: item.room || 'General',
-              labor_cost: item.labor_cost ?? null,
-              margin_percent: item.margin_percent ?? null,
-              client_price: item.client_price ?? null,
-              notes: item.notes || ''
+              labor_cost: isAllowance ? null : (item.labor_cost ?? null), // Allowances don't use labor_cost
+              margin_percent: isAllowance ? null : (item.margin_percent ?? null), // Allowances don't use margin
+              client_price: clientPrice,
+              notes: item.notes || item.allowance_notes || undefined,
+              allowance_amount: isAllowance ? (item.allowance_amount ?? null) : undefined,
+              subcontractor: isAllowance ? (item.subcontractor ?? null) : undefined
             }
           }
           // Fallback for unexpected types (should not happen with structured-only schema)
           return {
             description: '',
+            is_allowance: false,
             category: 'Other' as const,
-            cost_code: '999',
+            cost_code: null,
             room: 'General',
             labor_cost: null,
             margin_percent: null,
             client_price: null,
-            notes: ''
+            notes: undefined
           }
         })
         
         return {
           ...validated,
-          line_items: normalizedLineItems
+          line_items: normalizedLineItems as any // Type assertion needed due to optional fields in schema
         }
       } catch (parseError) {
         console.error('JSON parse/validation error:', parseError)
@@ -966,6 +1167,17 @@ async function detectAndCreateSelections(
         continue
       }
 
+      // STRICT RULE: Only create selection if:
+      // 1. cost_code is already '999' (manually set), OR
+      // 2. description contains allowance keywords
+      const isCostCode999 = lineItem.cost_code === '999'
+      const hasAllowanceKeywords = containsAllowanceKeywords(lineItem.description)
+      
+      if (!isCostCode999 && !hasAllowanceKeywords) {
+        // Skip - don't create selection and don't assign cost_code 999
+        continue
+      }
+
       // Classify the line item description
       const classification = await classifyLineItemAsSelection(
         lineItem.description,
@@ -979,16 +1191,20 @@ async function detectAndCreateSelections(
       console.log(`[Selection Detection] Detected selection: "${lineItem.description}"`)
 
       // Create selection row
+      // NOTE: Do NOT copy cost_code, room, category, or description from line items
+      // Selections should only store: allowance, subcontractor, product_name (title)
+      // Line items remain the source of truth for all other fields
       const selectionData: any = {
         estimate_id: estimateId,
-        cost_code: lineItem.cost_code || null,
-        room: lineItem.room_name || null,
-        category: classification.category || lineItem.category || null,
         title: classification.product_title || lineItem.description.substring(0, 100) || 'Untitled Selection',
-        description: classification.extended_description || lineItem.description || null,
         subcontractor: classification.subcontractor || null,
         allowance: classification.stated_allowance || null,
         source: 'ai_text',
+        // Explicitly set these to null - they should not be synced from line items
+        cost_code: null,
+        room: null,
+        category: null,
+        description: null,
       }
 
       const { data: newSelection, error: insertError } = await supabase
@@ -1109,21 +1325,21 @@ ${description}`
         ],
         temperature: 0.1,
         max_tokens: 200,
-        response_format: { type: 'json_object' }
-      })
+      response_format: { type: 'json_object' }
     })
+  })
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(`OpenAI API error: ${response.status} ${errorData.error?.message || response.statusText}`)
-    }
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(`OpenAI API error: ${response.status} ${errorData.error?.message || response.statusText}`)
+  }
 
-    const result = await response.json()
-    const content = result.choices[0]?.message?.content
+  const result = await response.json()
+  const content = result.choices[0]?.message?.content
 
-    if (!content) {
-      throw new Error('No content returned from OpenAI')
-    }
+  if (!content) {
+    throw new Error('No content returned from OpenAI')
+  }
 
     const parsed = JSON.parse(content)
     const validated = SelectionClassificationSchema.parse(parsed)

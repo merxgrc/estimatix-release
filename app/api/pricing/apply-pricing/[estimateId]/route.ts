@@ -368,10 +368,22 @@ export async function POST(
     }
 
     // 6. Process each line item
+    // SKIP allowance items - they already have client_price set and don't go through pricing engine
     let updatedCount = 0
     const updates: any[] = []
 
     for (const lineItem of lineItems) {
+      // CRITICAL: Skip allowance items entirely - do not apply pricing to them
+      // Check for is_allowance flag OR description starting with "ALLOWANCE:"
+      const isAllowance = lineItem.is_allowance === true || 
+                         (lineItem.description && lineItem.description.toUpperCase().trim().startsWith('ALLOWANCE:'))
+      
+      if (isAllowance) {
+        console.log(`Skipping allowance item ${lineItem.id} - preserving existing values`)
+        // DO NOT add to updates array - skip entirely to preserve existing pricing
+        continue
+      }
+
       // Find pricing match using vector-first engine
       const match = await findPricing(
         lineItem,

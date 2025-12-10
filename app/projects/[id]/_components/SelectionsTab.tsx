@@ -15,23 +15,7 @@ import { supabase } from "@/lib/supabase/client"
 import { useAuth } from "@/lib/auth-context"
 import { Plus, Save, Link2, AlertTriangle, Loader2 } from "lucide-react"
 import { toast } from 'sonner'
-
-// Cost code categories for display
-const COST_CATEGORIES = [
-  { label: "Demo (201)", code: "201" },
-  { label: "Framing (305)", code: "305" },
-  { label: "Plumbing (404)", code: "404" },
-  { label: "Electrical (405)", code: "405" },
-  { label: "HVAC (402)", code: "402" },
-  { label: "Windows (520)", code: "520" },
-  { label: "Doors (530)", code: "530" },
-  { label: "Cabinets (640)", code: "640" },
-  { label: "Countertops (641)", code: "641" },
-  { label: "Tile (950)", code: "950" },
-  { label: "Flooring (960)", code: "960" },
-  { label: "Paint (990)", code: "990" },
-  { label: "Other (999)", code: "999" }
-]
+import { COST_CATEGORIES } from '@/lib/constants'
 
 interface LineItem {
   id: string

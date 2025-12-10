@@ -20,10 +20,14 @@ import { DocumentsTab } from "./_components/DocumentsTab"
 import { WalkTab } from "./_components/WalkTab"
 import { SpecSheetsTab } from "./_components/SpecSheetsTab"
 import { SelectionsTab } from "./_components/SelectionsTab"
+import { ProposalsTab } from "./_components/ProposalsTab"
 import type { Project, Estimate, Upload, Profile } from "@/types/db"
-import { ArrowLeft, Trash2 } from "lucide-react"
+import { ArrowLeft, Trash2, MessageSquare, Download, FileDown } from "lucide-react"
+import { toast } from 'sonner'
 import { supabase } from "@/lib/supabase/client"
 import { useSidebar } from "@/lib/sidebar-context"
+import { CopilotChat } from "@/components/copilot/CopilotChat"
+import { Drawer, DrawerContent } from "@/components/ui/sheet"
 
 export default function ProjectDetailPage() {
   const router = useRouter()
@@ -44,6 +48,8 @@ export default function ProjectDetailPage() {
   const [deletingEstimateId, setDeletingEstimateId] = useState<string | null>(null)
   const [isParsing, setIsParsing] = useState(false)
   const [activeTab, setActiveTab] = useState("summary")
+  const [isCopilotOpen, setIsCopilotOpen] = useState(false)
+  const [isExportingPdf, setIsExportingPdf] = useState(false)
 
   useEffect(() => {
     const fetchProjectData = async () => {
@@ -568,17 +574,185 @@ export default function ProjectDetailPage() {
 
   const activeEstimate = activeEstimateId ? estimates.find(e => e.id === activeEstimateId) ?? null : null
 
+  const handleSendMessage = async (content: string, fileUrls?: string[]) => {
+    try {
+      // Get current line items from active estimate for context
+      let currentLineItems: any[] = []
+      if (activeEstimate) {
+        // Load line items for the active estimate directly from Supabase
+        const { data: lineItems, error } = await supabase
+          .from('estimate_line_items')
+          .select('id, description, category, cost_code, room_name, quantity, unit')
+          .eq('estimate_id', activeEstimate.id)
+        
+        if (!error && lineItems) {
+          currentLineItems = lineItems.map((item: any) => ({
+            id: item.id,
+            description: item.description,
+            category: item.category,
+            cost_code: item.cost_code,
+            room_name: item.room_name,
+            quantity: item.quantity,
+            unit: item.unit
+          }))
+        }
+      }
+
+      // Build messages array
+      const messages = [
+        {
+          role: 'user' as const,
+          content
+        }
+      ]
+
+      // Create FormData if files are present, otherwise use JSON
+      let body: FormData | string
+      let headers: HeadersInit
+
+      if (fileUrls && fileUrls.length > 0) {
+        const formData = new FormData()
+        formData.append('messages', JSON.stringify(messages))
+        formData.append('projectId', projectId)
+        formData.append('currentLineItems', JSON.stringify(currentLineItems))
+        formData.append('fileUrls', JSON.stringify(fileUrls))
+        body = formData
+        headers = {}
+      } else {
+        body = JSON.stringify({
+          messages,
+          projectId,
+          currentLineItems,
+          fileUrls: []
+        })
+        headers = {
+          'Content-Type': 'application/json'
+        }
+      }
+
+      const response = await fetch('/api/ai/copilot', {
+        method: 'POST',
+        headers,
+        body: body as BodyInit
+      })
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to send message'
+        try {
+          const error = await response.json()
+          errorMessage = error.error || errorMessage
+        } catch (e) {
+          // If JSON parsing fails, use status text
+          errorMessage = `Server error: ${response.status} ${response.statusText}`
+        }
+        throw new Error(errorMessage)
+      }
+
+      let result
+      try {
+        result = await response.json()
+      } catch (e) {
+        const text = await response.text()
+        console.error('Failed to parse response:', text)
+        throw new Error('Invalid response from server')
+      }
+      
+      // Reload estimates to show new line items
+      const updatedEstimates = await db.getEstimates(projectId)
+      setEstimates(updatedEstimates)
+      
+      console.log('Copilot response:', result)
+    } catch (error) {
+      console.error('Failed to send message:', error)
+      throw error
+    }
+  }
+
+  const handleVoiceRecord = () => {
+    // TODO: Implement voice recording
+    console.log('Voice record triggered')
+  }
+
+  const handleFileAttach = () => {
+    // File attachment is handled directly in CopilotChat component
+    console.log('File attachment handled in CopilotChat')
+  }
+
+  const handleExportPdf = async () => {
+    if (!activeEstimateId) {
+      toast.error('Please select an estimate to export')
+      return
+    }
+
+    setIsExportingPdf(true)
+    toast.loading('Generating PDF...', { id: 'export-pdf' })
+
+    try {
+      // Fetch PDF from API - it returns a URL to the PDF
+      const response = await fetch(`/api/spec-sheets/${activeEstimateId}/pdf`, {
+        method: 'GET'
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error(error.error || 'Failed to generate PDF')
+      }
+
+      const data = await response.json()
+      const pdfUrl = data.url
+
+      if (!pdfUrl) {
+        throw new Error('No PDF URL returned from server')
+      }
+
+      // Fetch the PDF blob from the URL
+      const pdfResponse = await fetch(pdfUrl)
+      if (!pdfResponse.ok) {
+        throw new Error('Failed to download PDF')
+      }
+
+      const blob = await pdfResponse.blob()
+
+      // Create a download link and trigger download
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      
+      // Sanitize project title for filename
+      const sanitizedTitle = (project?.title || 'estimate')
+        .replace(/[^a-z0-9]/gi, '-')
+        .toLowerCase()
+        .substring(0, 50)
+      const dateStr = new Date().toISOString().split('T')[0]
+      link.download = `SpecSheet-${sanitizedTitle}-${dateStr}.pdf`
+      
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      toast.success('PDF downloaded successfully!', { id: 'export-pdf' })
+    } catch (error) {
+      console.error('Failed to export PDF:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to export PDF'
+      toast.error(errorMessage, { id: 'export-pdf' })
+    } finally {
+      setIsExportingPdf(false)
+    }
+  }
+
   return (
     <AuthGuard>
       <div className="flex min-h-screen">
         <Sidebar />
 
         <div 
-          className="flex-1 transition-all duration-200"
-          style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
+          className="flex-1 transition-all duration-200 flex"
+          style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px`, marginRight: '0' }}
         >
-          {/* Top Bar */}
-          <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+          <div className="flex-1 flex flex-col min-w-0">
+            {/* Top Bar */}
+            <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="flex h-16 items-center justify-between px-4 md:px-6">
               <div className="flex items-center gap-4">
                 <Button variant="ghost" size="sm" onClick={() => router.push('/projects')}>
@@ -608,6 +782,24 @@ export default function ProjectDetailPage() {
               </div>
               <div className="flex items-center gap-2">
                 <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleExportPdf}
+                  disabled={isExportingPdf || !activeEstimateId}
+                >
+                  {isExportingPdf ? (
+                    <>
+                      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="mr-2 h-4 w-4" />
+                      Export PDF
+                    </>
+                  )}
+                </Button>
+                <Button
                   variant="destructive"
                   size="sm"
                   onClick={handleDeleteProject}
@@ -634,7 +826,7 @@ export default function ProjectDetailPage() {
           <main className="p-4 md:p-6">
             {/* Tab Navigation */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="w-full grid grid-cols-9 gap-1">
+              <TabsList className="w-full grid grid-cols-10 gap-1">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="estimate">Estimate</TabsTrigger>
                 <TabsTrigger value="pricing">Pricing</TabsTrigger>
@@ -643,7 +835,8 @@ export default function ProjectDetailPage() {
                 <TabsTrigger value="photos">Photos</TabsTrigger>
                 <TabsTrigger value="documents">Documents</TabsTrigger>
                 <TabsTrigger value="walk">Walk-n-Talk</TabsTrigger>
-                <TabsTrigger value="proposals">Spec Sheets</TabsTrigger>
+                <TabsTrigger value="proposals">Proposals</TabsTrigger>
+                <TabsTrigger value="spec-sheets">Spec Sheets</TabsTrigger>
               </TabsList>
 
               <TabsContent value="summary">
@@ -711,11 +904,53 @@ export default function ProjectDetailPage() {
               </TabsContent>
 
               <TabsContent value="proposals">
+                <ProposalsTab 
+                  project={project}
+                  activeEstimateId={activeEstimateId}
+                />
+              </TabsContent>
+
+              <TabsContent value="spec-sheets">
                 <SpecSheetsTab project={project} />
               </TabsContent>
             </Tabs>
           </main>
+          </div>
+
+          {/* Desktop Copilot Sidebar */}
+          <aside className="hidden lg:block w-[400px] flex-shrink-0 border-l border-border">
+            <CopilotChat
+              projectId={projectId}
+              onSendMessage={handleSendMessage}
+              onVoiceRecord={handleVoiceRecord}
+              onFileAttach={handleFileAttach}
+              className="h-screen sticky top-0"
+            />
+          </aside>
         </div>
+
+        {/* Mobile Copilot Drawer */}
+        <Drawer open={isCopilotOpen} onOpenChange={setIsCopilotOpen}>
+          <DrawerContent className="h-[calc(100vh-6rem)]">
+            <CopilotChat
+              projectId={projectId}
+              onSendMessage={handleSendMessage}
+              onVoiceRecord={handleVoiceRecord}
+              onFileAttach={handleFileAttach}
+              className="h-full border-0"
+            />
+          </DrawerContent>
+        </Drawer>
+
+        {/* Mobile Floating Action Button */}
+        <Button
+          onClick={() => setIsCopilotOpen(true)}
+          className="lg:hidden fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-lg z-30"
+          size="icon-lg"
+        >
+          <MessageSquare className="h-6 w-6" />
+          <span className="sr-only">Open Copilot</span>
+        </Button>
       </div>
     </AuthGuard>
   )
