@@ -21,6 +21,8 @@ import { WalkTab } from "./_components/WalkTab"
 import { SpecSheetsTab } from "./_components/SpecSheetsTab"
 import { SelectionsTab } from "./_components/SelectionsTab"
 import { ProposalsTab } from "./_components/ProposalsTab"
+import { ContractsTab } from "./_components/ContractsTab"
+import { ManageTab } from "./_components/ManageTab"
 import type { Project, Estimate, Upload, Profile } from "@/types/db"
 import { ArrowLeft, Trash2, MessageSquare, Download, FileDown } from "lucide-react"
 import { toast } from 'sonner'
@@ -826,7 +828,7 @@ export default function ProjectDetailPage() {
           <main className="p-4 md:p-6">
             {/* Tab Navigation */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="w-full grid grid-cols-10 gap-1">
+              <TabsList className="w-full grid grid-cols-12 gap-1">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="estimate">Estimate</TabsTrigger>
                 <TabsTrigger value="pricing">Pricing</TabsTrigger>
@@ -836,6 +838,8 @@ export default function ProjectDetailPage() {
                 <TabsTrigger value="documents">Documents</TabsTrigger>
                 <TabsTrigger value="walk">Walk-n-Talk</TabsTrigger>
                 <TabsTrigger value="proposals">Proposals</TabsTrigger>
+                <TabsTrigger value="contracts">Contracts</TabsTrigger>
+                <TabsTrigger value="manage">Manage</TabsTrigger>
                 <TabsTrigger value="spec-sheets">Spec Sheets</TabsTrigger>
               </TabsList>
 
@@ -908,6 +912,16 @@ export default function ProjectDetailPage() {
                   project={project}
                   activeEstimateId={activeEstimateId}
                 />
+              </TabsContent>
+
+              <TabsContent value="contracts">
+                <ContractsTab 
+                  project={project}
+                />
+              </TabsContent>
+
+              <TabsContent value="manage">
+                {project && <ManageTab project={project} />}
               </TabsContent>
 
               <TabsContent value="spec-sheets">

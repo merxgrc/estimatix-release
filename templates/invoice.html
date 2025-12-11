@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Invoice</title>
+  <style>
+    @page { 
+      margin: 40px 50px; 
+    }
+    body { 
+      font-family: "Arial", "Helvetica", sans-serif; 
+      font-size: 11pt; 
+      line-height: 1.6; 
+      color: #000;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #000;
+    }
+    .company-section {
+      flex: 1;
+    }
+    .logo-container {
+      margin-bottom: 15px;
+    }
+    .logo {
+      max-width: 200px;
+      max-height: 80px;
+      object-fit: contain;
+    }
+    .company-name {
+      font-size: 20pt;
+      font-weight: bold;
+      margin-bottom: 8px;
+      color: #1a1a1a;
+    }
+    .company-details {
+      font-size: 10pt;
+      color: #666;
+      line-height: 1.8;
+    }
+    .invoice-header {
+      text-align: right;
+    }
+    .invoice-title {
+      font-size: 28pt;
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #1a1a1a;
+      letter-spacing: 2px;
+    }
+    .invoice-number {
+      font-size: 14pt;
+      font-weight: bold;
+      color: #666;
+    }
+    .bill-to-section {
+      margin: 30px 0;
+      padding: 15px;
+      background-color: #f9f9f9;
+      border-left: 4px solid #000;
+    }
+    .bill-to-label {
+      font-weight: bold;
+      font-size: 10pt;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+      color: #666;
+    }
+    .bill-to-content {
+      font-size: 11pt;
+      line-height: 1.8;
+    }
+    .invoice-dates {
+      display: flex;
+      gap: 40px;
+      margin: 20px 0;
+      font-size: 10pt;
+    }
+    .date-item {
+      display: flex;
+      flex-direction: column;
+    }
+    .date-label {
+      font-weight: bold;
+      text-transform: uppercase;
+      font-size: 9pt;
+      color: #666;
+      margin-bottom: 4px;
+    }
+    .date-value {
+      font-size: 11pt;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 25px 0;
+    }
+    th {
+      background-color: #1a1a1a;
+      color: #fff;
+      padding: 12px;
+      text-align: left;
+      font-weight: bold;
+      font-size: 10pt;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    th.amount-col,
+    th.percent-col {
+      text-align: right;
+    }
+    td {
+      padding: 12px;
+      border-bottom: 1px solid #ddd;
+      font-size: 11pt;
+    }
+    td.amount-col,
+    td.percent-col {
+      text-align: right;
+      font-family: "Courier New", monospace;
+      tabular-nums: true;
+    }
+    .total-row {
+      background-color: #f5f5f5;
+      font-weight: bold;
+      border-top: 2px solid #000;
+      border-bottom: 2px solid #000;
+    }
+    .total-row td {
+      padding: 15px 12px;
+      font-size: 12pt;
+    }
+    .total-row .amount-col {
+      font-size: 14pt;
+    }
+    .payment-section {
+      margin-top: 40px;
+      padding: 20px;
+      background-color: #f9f9f9;
+      border: 1px solid #ddd;
+    }
+    .payment-title {
+      font-weight: bold;
+      font-size: 12pt;
+      margin-bottom: 15px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .payment-content {
+      font-size: 11pt;
+      line-height: 1.8;
+    }
+    .bank-details {
+      margin-top: 10px;
+      padding-left: 20px;
+    }
+    .bank-details p {
+      margin: 5px 0;
+    }
+    .no-break {
+      page-break-inside: avoid;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header: Logo, Company Info, Invoice Title -->
+  <div class="header no-break">
+    <div class="company-section">
+      {{#if company_logo_url}}
+      <div class="logo-container">
+        <img src="{{company_logo_url}}" alt="{{company_name}}" class="logo" />
+      </div>
+      {{/if}}
+      <div class="company-name">{{company_name}}</div>
+      <div class="company-details">
+        {{#if company_address}}{{company_address}}<br>{{/if}}
+        {{#if company_phone}}Phone: {{company_phone}}<br>{{/if}}
+        {{#if company_website}}{{company_website}}{{/if}}
+      </div>
+    </div>
+    <div class="invoice-header">
+      <div class="invoice-title">INVOICE</div>
+      <div class="invoice-number">#{{invoice_number}}</div>
+    </div>
+  </div>
+
+  <!-- Bill To Section -->
+  <div class="bill-to-section no-break">
+    <div class="bill-to-label">Bill To</div>
+    <div class="bill-to-content">
+      <strong>{{client_name}}</strong><br>
+      {{#if client_address}}{{client_address}}<br>{{/if}}
+      {{#if project_name}}Project: {{project_name}}{{/if}}
+    </div>
+  </div>
+
+  <!-- Invoice Dates -->
+  <div class="invoice-dates">
+    <div class="date-item">
+      <div class="date-label">Invoice Date</div>
+      <div class="date-value">{{invoice_date}}</div>
+    </div>
+    {{#if due_date}}
+    <div class="date-item">
+      <div class="date-label">Due Date</div>
+      <div class="date-value"><strong>{{due_date}}</strong></div>
+    </div>
+    {{/if}}
+  </div>
+
+  <!-- Services Table -->
+  <table class="no-break">
+    <thead>
+      <tr>
+        <th>Description</th>
+        <th class="percent-col">% Billed</th>
+        <th class="amount-col">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{#each items}}
+      <tr>
+        <td>{{this.description}}</td>
+        <td class="percent-col">{{this.percent_billed}}%</td>
+        <td class="amount-col">${{formatCurrency this.amount}}</td>
+      </tr>
+      {{/each}}
+      <tr class="total-row">
+        <td><strong>TOTAL</strong></td>
+        <td class="percent-col"></td>
+        <td class="amount-col"><strong>${{formatCurrency total_amount}}</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Payment Instructions -->
+  <div class="payment-section no-break">
+    <div class="payment-title">Payment Instructions</div>
+    <div class="payment-content">
+      {{#if payment_instructions}}
+        {{payment_instructions}}
+      {{else}}
+        {{#if bank_account}}
+          <p><strong>Bank Transfer:</strong></p>
+          <div class="bank-details">
+            {{#if bank_name}}<p>Bank: {{bank_name}}</p>{{/if}}
+            {{#if bank_account}}<p>Account Number: {{bank_account}}</p>{{/if}}
+            {{#if bank_routing}}<p>Routing Number: {{bank_routing}}</p>{{/if}}
+          </div>
+          <p style="margin-top: 15px;"><strong>Or make checks payable to:</strong> {{make_checks_payable_to}}</p>
+        {{else}}
+          <p>Please make checks payable to <strong>{{make_checks_payable_to}}</strong></p>
+          {{#if company_address}}
+          <p style="margin-top: 10px;">Mail payment to:<br>{{company_address}}</p>
+          {{/if}}
+        {{/if}}
+      {{/if}}
+    </div>
+  </div>
+</body>
+</html>
