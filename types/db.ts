@@ -116,6 +116,7 @@ export interface Database {
           estimate_id: string
           project_id: string
           room_name: string | null
+          room_id: string | null
           scope: string | null
           description: string | null
           quantity: number | null
@@ -125,10 +126,17 @@ export interface Database {
           cost_code: string | null
           category: string | null
           labor_cost: number | null
+          material_cost: number | null
+          overhead_cost: number | null
+          direct_cost: number | null
           margin_percent: number | null
           client_price: number | null
           selection_id: string | null
+          task_library_id: string | null
+          pricing_source: string | null
+          matched_via: string | null
           is_allowance: boolean | null
+          is_active: boolean | null
           created_at: string
           updated_at: string
         }
@@ -137,6 +145,7 @@ export interface Database {
           estimate_id: string
           project_id: string
           room_name?: string | null
+          room_id?: string | null
           scope?: string | null
           description?: string | null
           quantity?: number | null
@@ -146,10 +155,17 @@ export interface Database {
           cost_code?: string | null
           category?: string | null
           labor_cost?: number | null
+          material_cost?: number | null
+          overhead_cost?: number | null
+          direct_cost?: number | null
           margin_percent?: number | null
           client_price?: number | null
           selection_id?: string | null
+          task_library_id?: string | null
+          pricing_source?: string | null
+          matched_via?: string | null
           is_allowance?: boolean | null
+          is_active?: boolean | null
           created_at?: string
           updated_at?: string
         }
@@ -158,6 +174,7 @@ export interface Database {
           estimate_id?: string
           project_id?: string
           room_name?: string | null
+          room_id?: string | null
           scope?: string | null
           description?: string | null
           quantity?: number | null
@@ -167,10 +184,17 @@ export interface Database {
           cost_code?: string | null
           category?: string | null
           labor_cost?: number | null
+          material_cost?: number | null
+          overhead_cost?: number | null
+          direct_cost?: number | null
           margin_percent?: number | null
           client_price?: number | null
           selection_id?: string | null
+          task_library_id?: string | null
+          pricing_source?: string | null
+          matched_via?: string | null
           is_allowance?: boolean | null
+          is_active?: boolean | null
           created_at?: string
           updated_at?: string
         }
@@ -194,6 +218,67 @@ export interface Database {
             columns: ["selection_id"]
             isOneToOne: false
             referencedRelation: "selections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "estimate_line_items_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "estimate_line_items_task_library_id_fkey"
+            columns: ["task_library_id"]
+            isOneToOne: false
+            referencedRelation: "task_library"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      rooms: {
+        Row: {
+          id: string
+          project_id: string
+          name: string
+          type: string | null
+          area_sqft: number | null
+          source: string | null
+          is_active: boolean | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          name: string
+          type?: string | null
+          area_sqft?: number | null
+          source?: string | null
+          is_active?: boolean | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          name?: string
+          type?: string | null
+          area_sqft?: number | null
+          source?: string | null
+          is_active?: boolean | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rooms_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
             referencedColumns: ["id"]
           }
         ]
@@ -408,6 +493,10 @@ export type ChatMessage = Database['public']['Tables']['chat_messages']['Row']
 export type ChatMessageInsert = Database['public']['Tables']['chat_messages']['Insert']
 export type ChatMessageUpdate = Database['public']['Tables']['chat_messages']['Update']
 
+export type Room = Database['public']['Tables']['rooms']['Row']
+export type RoomInsert = Database['public']['Tables']['rooms']['Insert']
+export type RoomUpdate = Database['public']['Tables']['rooms']['Update']
+
 // Extended EstimateLineItem interface supporting new pricing model
 export interface EstimateLineItem {
   id?: string
@@ -416,7 +505,9 @@ export interface EstimateLineItem {
   description: string
   category?: string
   cost_code?: string
-  room?: string
+  room?: string // Legacy: kept for backward compatibility
+  room_id?: string | null // New: FK to rooms table
+  room_name?: string | null // Legacy: kept for backward compatibility
 
   quantity?: number
   unit?: string
@@ -443,6 +534,7 @@ export interface EstimateLineItem {
   // Selections + allowances
   selection_id?: string | null
   is_allowance?: boolean
+  is_active?: boolean | null
 
   notes?: string
 }

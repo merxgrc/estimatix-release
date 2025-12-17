@@ -7,6 +7,7 @@ import { Mic, Paperclip, Send, Loader2, X, FileImage, FileText } from 'lucide-re
 import { cn } from '@/lib/utils'
 import { supabase } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/auth-context'
+import { toast } from 'sonner'
 import type { ChatMessage } from '@/types/db'
 
 interface CopilotChatProps {
@@ -267,6 +268,21 @@ export function CopilotChat({
       }
 
       setAttachedFiles(prev => [...prev, ...newFiles])
+
+      // Immediately surface the upload in the chat UI so users see it without reload
+      if (newFiles.length > 0) {
+        const now = new Date().toISOString()
+        const fileNames = newFiles.map(f => f.name).join(', ')
+        const uploadMessage: ChatMessage = {
+          id: `upload-${Date.now()}`,
+          project_id: projectId,
+          role: 'system',
+          content: `Attached file${newFiles.length > 1 ? 's' : ''}: ${fileNames}`,
+          related_action: null,
+          created_at: now
+        }
+        setMessages(prev => [...prev, uploadMessage])
+      }
     } catch (error) {
       console.error('File upload error:', error)
       alert('Failed to upload files. Please try again.')
@@ -349,7 +365,30 @@ export function CopilotChat({
       console.error('Failed to send message:', error)
       // Remove the optimistic message on error
       setMessages(prev => prev.filter(m => m.id !== optimisticMsg.id))
-      // TODO: Show error toast
+      
+      // Show user-friendly error message
+      const errorMessage = error instanceof Error ? error.message : 'Failed to send message'
+      const errorCode = (error as any)?.code
+      
+      // Handle specific error codes
+      if (errorCode === 'SCANNED_PDF') {
+        toast.error('Scanned PDF Detected', {
+          description: 'This PDF appears to be a scanned image. Please paste the text manually or use an OCR tool.',
+          duration: 8000,
+        })
+      } else if (errorCode === 'FILE_TOO_LARGE') {
+        toast.error('File Too Large', {
+          description: 'The file exceeds the 10MB limit. Please use a smaller file.',
+        })
+      } else if (errorCode === 'DOWNLOAD_ERROR' || errorCode === 'PARSE_ERROR') {
+        toast.error('File Processing Error', {
+          description: errorMessage,
+        })
+      } else {
+        toast.error('Failed to send message', {
+          description: errorMessage,
+        })
+      }
     } finally {
       setIsSubmitting(false)
     }

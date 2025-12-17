@@ -28,7 +28,7 @@ export async function applyPricing(
     description: string
     unitCost?: number
     pricing_source?: 'task_library' | 'user_library' | 'manual' | 'ai' | null
-    is_allowance?: boolean
+    is_allowance?: boolean | null
   },
   userId?: string
 ): Promise<LineItem> {
@@ -265,9 +265,16 @@ export async function applyPricingToItems(
     description: string
     unitCost?: number
     pricing_source?: 'task_library' | 'user_library' | 'manual' | 'ai' | null
+    is_allowance?: boolean | null
   }>,
   userId?: string
 ): Promise<LineItem[]> {
-  return Promise.all(items.map(item => applyPricing(item, userId)))
+  // Normalize is_allowance to boolean | undefined to satisfy applyPricing
+  const normalizedItems = items.map(item => ({
+    ...item,
+    is_allowance: item.is_allowance === null ? undefined : item.is_allowance
+  }))
+
+  return Promise.all(normalizedItems.map(item => applyPricing(item, userId)))
 }
 

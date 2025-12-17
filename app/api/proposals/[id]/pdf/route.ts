@@ -255,7 +255,9 @@ export async function GET(
       await browser.close()
       
       // Return PDF as blob
-      return new NextResponse(pdf, {
+      const pdfArrayBuffer = pdf instanceof Buffer ? pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength) : pdf
+
+      return new NextResponse(pdfArrayBuffer as BodyInit, {
         headers: {
           "Content-Type": "application/pdf",
           "Content-Disposition": `attachment; filename="Proposal-${proposal.title || 'Proposal'}-v${proposal.version}-${Date.now()}.pdf"`,

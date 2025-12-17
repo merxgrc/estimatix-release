@@ -165,7 +165,10 @@ export async function GET(
     })
     await browser.close()
 
-    return new NextResponse(pdf, {
+    // Convert Buffer -> ArrayBuffer for NextResponse BodyInit
+    const pdfArrayBuffer = pdf instanceof Buffer ? pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength) : pdf
+
+    return new NextResponse(pdfArrayBuffer as BodyInit, {
       headers: {
         'Content-Type': 'application/pdf',
         'Content-Disposition': `attachment; filename="Invoice-${invoice.invoice_number}.pdf"`

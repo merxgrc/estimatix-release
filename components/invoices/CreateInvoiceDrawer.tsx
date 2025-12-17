@@ -143,11 +143,15 @@ export function CreateInvoiceDrawer({ open, onOpenChange, projectId, tasks, onSu
       }
 
       // Create invoice and invoice_items records
-      const result = await createInvoice(projectId, {
+      const payload: any = {
         issuedDate: format(issuedDate, 'yyyy-MM-dd'),
-        dueDate: dueDate ? format(dueDate, 'yyyy-MM-dd') : undefined,
         items
-      })
+      }
+      if (dueDate) {
+        payload.dueDate = format(dueDate, 'yyyy-MM-dd')
+      }
+
+      const result = await createInvoice(projectId, payload)
 
       if (!result.success) throw new Error(result.error)
       

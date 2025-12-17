@@ -772,7 +772,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
         client_price: mergedItem.client_price || 0,
         pricing_source: (mergedItem.pricing_source as 'task_library' | 'user_library' | 'manual' | null) || null,
         confidence: mergedItem.confidence || null,
-        notes: mergedItem.notes
+        notes: mergedItem.notes ?? undefined
       }
     })
 

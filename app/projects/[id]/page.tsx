@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter, useParams } from 'next/navigation'
+import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { Sidebar } from "@/components/sidebar"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -34,6 +34,7 @@ import { Drawer, DrawerContent } from "@/components/ui/sheet"
 export default function ProjectDetailPage() {
   const router = useRouter()
   const params = useParams()
+  const searchParams = useSearchParams()
   const { user } = useAuth()
   const { sidebarWidth, isCollapsed } = useSidebar()
   const projectId = params.id as string
@@ -52,6 +53,14 @@ export default function ProjectDetailPage() {
   const [activeTab, setActiveTab] = useState("summary")
   const [isCopilotOpen, setIsCopilotOpen] = useState(false)
   const [isExportingPdf, setIsExportingPdf] = useState(false)
+
+  // Handle URL query params for tab and roomId
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    if (tab) {
+      setActiveTab(tab)
+    }
+  }, [searchParams])
 
   useEffect(() => {
     const fetchProjectData = async () => {
@@ -640,14 +649,52 @@ export default function ProjectDetailPage() {
 
       if (!response.ok) {
         let errorMessage = 'Failed to send message'
+        let errorCode: string | undefined
+        let errorDetails: any
+        
         try {
           const error = await response.json()
           errorMessage = error.error || errorMessage
+          errorCode = error.code
+          errorDetails = error.details
+          
+          // Handle specific error codes with user-friendly messages
+          if (errorCode === 'SCANNED_PDF') {
+            errorMessage = 'This PDF appears to be a scanned image. Please paste the text manually or use an OCR tool.'
+          } else if (errorCode === 'DOWNLOAD_ERROR') {
+            errorMessage = `Failed to download file: ${errorMessage}`
+          } else if (errorCode === 'PARSE_ERROR') {
+            errorMessage = 'We could not parse this PDF. It may be corrupted or image-only. Try re-uploading or pasting the text manually.'
+          } else if (errorCode === 'FILE_TOO_LARGE') {
+            errorMessage = `File is too large. Maximum size is 10MB.`
+          }
         } catch (e) {
           // If JSON parsing fails, use status text
+          console.error('Failed to parse error response:', e)
           errorMessage = `Server error: ${response.status} ${response.statusText}`
         }
-        throw new Error(errorMessage)
+        
+        // Create error with code and details attached as plain properties
+        const errorObj: Error & { code?: string; details?: any } = new Error(errorMessage)
+
+        if (errorCode && typeof errorCode === 'string') {
+          (errorObj as any).code = errorCode
+        }
+
+        if (errorDetails && typeof errorDetails === 'object') {
+          // Best-effort serialization to avoid passing complex objects
+          let safeDetails: any = undefined
+          try {
+            safeDetails = JSON.parse(JSON.stringify(errorDetails))
+          } catch {
+            safeDetails = undefined
+          }
+          if (safeDetails !== undefined) {
+            (errorObj as any).details = safeDetails
+          }
+        }
+
+        throw errorObj
       }
 
       let result

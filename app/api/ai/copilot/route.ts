@@ -1,13 +1,88 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase/server'
-import { requireAuth } from '@/lib/supabase/server'
+import PDFParser from 'pdf2json'
+import { createServerClient, createServiceRoleClient, requireAuth } from '@/lib/supabase/server'
 import { getProfileByUserId } from '@/lib/profile'
 import { matchTask } from '@/lib/pricing/match-task'
 import { applyPricing } from '@/services/pricingService'
+import { fuzzyScore } from '@/lib/pricing/fuzzy'
 import type { AIAction } from '@/types/estimate'
 
 export const runtime = 'nodejs' // Disable Edge runtime for OpenAI API compatibility
+
+/**
+ * Custom error class for PDF processing errors
+ * Used to provide specific error codes and status codes for frontend handling
+ */
+class PDFProcessingError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public statusCode: number = 500,
+    public details?: any
+  ) {
+    super(message)
+    this.name = 'PDFProcessingError'
+  }
+}
+
+// Helper: parse PDF with pdf-parse and fallback to pdf2json
+async function parsePdfWithFallback(buffer: Buffer, storagePath: string): Promise<{ text: string; numpages: number }> {
+  // Primary: pdf-parse
+  try {
+    const pdfParseModule = await import('pdf-parse')
+    const pdfParse = (pdfParseModule as any).default || pdfParseModule
+    const pdfData = await pdfParse(buffer)
+    return {
+      text: pdfData.text || '',
+      numpages: pdfData.numpages || 0,
+    }
+  } catch (primaryErr) {
+    console.warn(`[PDF Warning] pdf-parse failed for ${storagePath}, switching to pdf2json fallback`, primaryErr)
+
+    // Fallback: pdf2json (event-based)
+    try {
+      const parser = new PDFParser(undefined, 1) // 1 = raw text mode
+      const text = await new Promise<string>((resolve, reject) => {
+        parser.on('pdfParser_dataError', (errData: any) => reject(errData?.parserError || errData))
+        parser.on('pdfParser_dataReady', (pdfData: any) => {
+          try {
+            const rawText = typeof parser.getRawTextContent === 'function'
+              ? parser.getRawTextContent()
+              : ''
+            resolve(rawText || '')
+          } catch (e) {
+            reject(e)
+          }
+        })
+        parser.parseBuffer(buffer)
+      })
+
+      // Attempt to read page count from pdf2json structure
+      let pageCount = 0
+      try {
+        const pdfData = (parser as any).pdfDocument
+        pageCount = pdfData?.formImage?.Pages?.length ?? 0
+      } catch {
+        pageCount = 0
+      }
+
+      return { text, numpages: pageCount }
+    } catch (fallbackErr) {
+      console.error(`[PDF Error] pdf2json fallback failed for ${storagePath}:`, fallbackErr)
+      throw new PDFProcessingError(
+        'PDF file is corrupted or incompatible.',
+        'PARSE_ERROR',
+        422,
+        {
+          storagePath,
+          errorMessage: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+          parser: 'pdf2json',
+        }
+      )
+    }
+  }
+}
 
 // Zod schema for the Copilot request
 const CopilotRequestSchema = z.object({
@@ -33,7 +108,7 @@ const CopilotRequestSchema = z.object({
 const CopilotResponseSchema = z.object({
   response_text: z.string(),
   actions: z.array(z.object({
-    type: z.enum(['add_line_item', 'update_line_item', 'delete_line_item', 'info']),
+    type: z.enum(['add_line_item', 'update_line_item', 'delete_line_item', 'add_room', 'hide_room', 'info']),
     data: z.record(z.any())
   }))
 })
@@ -128,7 +203,59 @@ export async function POST(req: NextRequest) {
         fileContext = await processFiles(supabase, fileUrls)
         imageUrls = await getImageUrls(supabase, fileUrls)
       } catch (error) {
-        console.error('File processing error:', error)
+        console.error('[Copilot] File processing error:', error)
+        
+        // Handle PDFProcessingError with specific status codes and error codes
+        if (error instanceof PDFProcessingError) {
+          // Ensure details are serializable (remove any non-serializable objects)
+          let serializableDetails: any = undefined
+          if (error.details && typeof error.details === 'object') {
+            try {
+              // Use JSON serialization to ensure only plain objects are included
+              const serialized = JSON.stringify(error.details, (key, value) => {
+                // Filter out functions, undefined, and other non-serializable values
+                if (typeof value === 'function' || value === undefined) {
+                  return null
+                }
+                // Convert Error objects to plain objects
+                if (value instanceof Error) {
+                  return {
+                    name: value.name,
+                    message: value.message,
+                  }
+                }
+                // Skip circular references
+                if (typeof value === 'object' && value !== null) {
+                  try {
+                    JSON.stringify(value)
+                  } catch {
+                    return null
+                  }
+                }
+                return value
+              })
+              serializableDetails = JSON.parse(serialized)
+            } catch (serializeError) {
+              console.error('[Copilot] Failed to serialize error details:', serializeError)
+              // If serialization fails, just include a simple message
+              serializableDetails = { 
+                message: 'Error details could not be serialized',
+                originalMessage: error.message
+              }
+            }
+          }
+          
+          return NextResponse.json(
+            {
+              error: error.message,
+              code: error.code,
+              ...(serializableDetails !== undefined && { details: serializableDetails }),
+            },
+            { status: error.statusCode }
+          )
+        }
+        
+        // Generic error handling
         return NextResponse.json(
           { error: `Failed to process files: ${error instanceof Error ? error.message : 'Unknown error'}` },
           { status: 500 }
@@ -168,8 +295,16 @@ export async function POST(req: NextRequest) {
       estimateId = newEstimate.id
     }
 
+    // Fetch existing rooms for the project
+    const { data: rooms } = await supabase
+      .from('rooms')
+      .select('id, name, type, is_active')
+      .eq('project_id', projectId)
+      .eq('is_active', true)
+      .order('name', { ascending: true })
+
     // Build system prompt for the AI
-    const systemPrompt = buildSystemPrompt(currentLineItems, project, fileContext)
+    const systemPrompt = buildSystemPrompt(currentLineItems, project, fileContext, rooms || [])
 
     // Enhance user message with file context if present
     const enhancedMessages = [...messages]
@@ -278,6 +413,90 @@ export async function POST(req: NextRequest) {
       },
       { status: 500 }
     )
+  }
+}
+
+/**
+ * Resolve room_name to room_id
+ * Fuzzy matches room names case-insensitively
+ * Auto-creates room if not found (with source='ai_chat')
+ */
+async function resolveRoomName(
+  roomName: string | null | undefined,
+  projectId: string,
+  supabase: any
+): Promise<string | null> {
+  if (!roomName || roomName.trim().length === 0 || roomName.toLowerCase() === 'general') {
+    return null
+  }
+
+  const normalizedName = roomName.trim()
+
+  // Fetch all rooms for this project
+  const { data: rooms, error } = await supabase
+    .from('rooms')
+    .select('id, name')
+    .eq('project_id', projectId)
+    .eq('is_active', true)
+
+  if (error) {
+    console.error('Error fetching rooms:', error)
+    return null
+  }
+
+  if (!rooms || rooms.length === 0) {
+    // No rooms exist, create this one
+    return await createRoom(normalizedName, projectId, supabase)
+  }
+
+  // Fuzzy match against existing rooms
+  let bestMatch: { id: string; score: number } | null = null
+  const threshold = 0.7 // 70% similarity threshold
+
+  for (const room of rooms) {
+    const score = fuzzyScore(normalizedName.toLowerCase(), room.name.toLowerCase())
+    if (score >= threshold && (!bestMatch || score > bestMatch.score)) {
+      bestMatch = { id: room.id, score }
+    }
+  }
+
+  if (bestMatch) {
+    return bestMatch.id
+  }
+
+  // No match found, create new room
+  return await createRoom(normalizedName, projectId, supabase)
+}
+
+/**
+ * Create a new room with source='ai_chat'
+ */
+async function createRoom(
+  name: string,
+  projectId: string,
+  supabase: any
+): Promise<string | null> {
+  try {
+    const { data: newRoom, error } = await supabase
+      .from('rooms')
+      .insert({
+        project_id: projectId,
+        name: name.trim(),
+        source: 'ai_chat',
+        is_active: true,
+      })
+      .select('id')
+      .single()
+
+    if (error) {
+      console.error('Error creating room:', error)
+      return null
+    }
+
+    return newRoom.id
+  } catch (error) {
+    console.error('Error creating room:', error)
+    return null
   }
 }
 
@@ -412,21 +631,57 @@ async function transcribeAudio(audioFile: File): Promise<string> {
 
 /**
  * Process files (images and PDFs) and return context string
+ * 
+ * Throws PDFProcessingError for PDF-specific issues that should be handled by the caller
  */
 async function processFiles(supabase: any, fileUrls: string[]): Promise<string> {
+  // Use service role for storage downloads to avoid RLS issues
+  const storageClient = createServiceRoleClient()
   const contexts: string[] = []
 
   for (const storagePath of fileUrls) {
     try {
-      // Download file from Supabase Storage
-      const { data: fileData, error: downloadError } = await supabase.storage
-        .from('uploads')
-        .download(storagePath)
+      // Download file from Supabase Storage using service role (bypass RLS)
+      console.log(`[PDF Success] Downloading file: ${storagePath}`)
+      let fileData: Blob | null = null
+      try {
+        const { data, error: downloadError } = await storageClient.storage
+          .from('uploads')
+          .download(storagePath)
 
-      if (downloadError) {
-        console.error(`Failed to download file ${storagePath}:`, downloadError)
-        continue
+        if (downloadError || !data) {
+          console.error(`[PDF Error] Download failed for ${storagePath}:`, downloadError)
+          throw new PDFProcessingError(
+            'Could not retrieve file.',
+            'FILE_NOT_FOUND',
+            404,
+            {
+              storagePath,
+              errorMessage: downloadError?.message,
+              errorCode:
+                (downloadError as any)?.statusCode ??
+                (downloadError as any)?.code ??
+                undefined,
+            }
+          )
+        }
+
+        fileData = data
+        console.log(`[PDF Success] Downloaded file: ${storagePath}`)
+      } catch (downloadErr) {
+        if (downloadErr instanceof PDFProcessingError) {
+          throw downloadErr
+        }
+        console.error(`[PDF Error] Download exception for ${storagePath}:`, downloadErr)
+        throw new PDFProcessingError(
+          'Could not retrieve file.',
+          'FILE_NOT_FOUND',
+          404,
+          { storagePath }
+        )
       }
+
+      console.log(`[PDF Success] File size: ${fileData.size} bytes`)
 
       // Get file extension to determine type
       const extension = storagePath.split('.').pop()?.toLowerCase()
@@ -434,24 +689,135 @@ async function processFiles(supabase: any, fileUrls: string[]): Promise<string> 
       const isPDF = extension === 'pdf'
 
       if (isImage) {
-        // Image will be processed with vision model, just add a note
         contexts.push(`[Image: ${storagePath.split('/').pop()}]`)
       } else if (isPDF) {
-        // Extract text from PDF (dynamic import for CommonJS module)
+        console.log(`[PDF Success] Parsing PDF: ${storagePath}`)
         try {
-          const pdfParseModule = await import('pdf-parse')
-          const pdfParse = (pdfParseModule as any).default || pdfParseModule
           const arrayBuffer = await fileData.arrayBuffer()
           const buffer = Buffer.from(arrayBuffer)
-          const pdfData = await pdfParse(buffer)
-          contexts.push(`[PDF: ${storagePath.split('/').pop()}]\n${pdfData.text}`)
-        } catch (pdfError) {
-          console.error(`Error parsing PDF ${storagePath}:`, pdfError)
-          contexts.push(`[PDF: ${storagePath.split('/').pop()} - Error extracting text]`)
+          console.log(`[PDF Success] PDF buffer created: ${buffer.length} bytes`)
+
+          // Size guard
+          const MAX_FILE_SIZE = 10 * 1024 * 1024
+          if (buffer.length > MAX_FILE_SIZE) {
+            const fileSizeMB = (buffer.length / (1024 * 1024)).toFixed(2)
+            console.warn(`[PDF Warning] File too large (${fileSizeMB}MB) for ${storagePath}`)
+            throw new PDFProcessingError(
+              'PDF exceeds 10MB size limit.',
+              'FILE_TOO_LARGE',
+              413,
+              { storagePath, fileSizeMB: Number(fileSizeMB) }
+            )
+          }
+
+          // Parse guard
+        // Primary: pdf-parse. On failure, fall back to pdfjs-dist page-by-page extraction.
+        let pdfData: any
+        try {
+          console.log(`[PDF Success] pdf-parse imported, parsing buffer...`)
+          const pdfParseModule = await import('pdf-parse')
+          const pdfParse = (pdfParseModule as any).default || pdfParseModule
+          pdfData = await pdfParse(buffer)
+        } catch (primaryErr) {
+          console.warn(`[PDF Warning] pdf-parse failed for ${storagePath}, switching to pdf2json fallback...`, primaryErr)
+
+          try {
+            const parser = new PDFParser(undefined, 1) // 1 = raw text mode
+            const text = await new Promise<string>((resolve, reject) => {
+              parser.on('pdfParser_dataError', (errData: any) => reject(errData?.parserError || errData))
+              parser.on('pdfParser_dataReady', () => {
+                try {
+                  const rawText = typeof parser.getRawTextContent === 'function'
+                    ? parser.getRawTextContent()
+                    : ''
+                  resolve(rawText || '')
+                } catch (e) {
+                  reject(e)
+                }
+              })
+              parser.parseBuffer(buffer)
+            })
+
+            // Attempt to read page count
+            let pageCount = 0
+            try {
+              const pdfDataInternal = (parser as any).pdfDocument
+              pageCount = pdfDataInternal?.formImage?.Pages?.length ?? 0
+            } catch {
+              pageCount = 0
+            }
+
+            pdfData = {
+              text,
+              numpages: pageCount,
+            }
+          } catch (fallbackErr) {
+            console.error(`[PDF Error] pdf2json fallback failed for ${storagePath}:`, fallbackErr)
+            throw new PDFProcessingError(
+              'PDF file is corrupted or incompatible.',
+              'PARSE_ERROR',
+              422,
+              {
+                storagePath,
+                errorMessage: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+                parser: 'pdf2json',
+              }
+            )
+          }
         }
+
+        console.log(`[PDF Success] PDF parsed; pages=${pdfData.numpages}, textLen=${pdfData.text?.length || 0}`)
+
+        const extractedText = pdfData.text || ''
+        const trimmedText = extractedText.trim()
+
+          if (!trimmedText) {
+            console.warn(`[PDF Warning] Scanned/empty PDF detected for ${storagePath}`)
+            throw new PDFProcessingError(
+              'This looks like an image-only PDF. Please paste the text manually.',
+              'SCANNED_PDF',
+              422,
+              {
+                textLength: extractedText.length,
+                trimmedLength: trimmedText.length,
+                pageCount: pdfData.numpages,
+                storagePath,
+              }
+            )
+          }
+
+          const first100Chars = extractedText.substring(0, 100)
+          console.log(`[PDF Success] First 100 characters: ${first100Chars}`)
+          console.log(`[PDF Success] Non-whitespace text length: ${trimmedText.length}`)
+
+          contexts.push(`[PDF: ${storagePath.split('/').pop()}]\n${extractedText}`)
+        } catch (pdfError) {
+          if (pdfError instanceof PDFProcessingError) {
+            throw pdfError
+          }
+
+          console.error(`[PDF Error] Unexpected parse failure for ${storagePath}:`, pdfError)
+          throw new PDFProcessingError(
+            'PDF file is corrupted or incompatible.',
+            'PARSE_ERROR',
+            422,
+            {
+              storagePath,
+              errorMessage: pdfError instanceof Error ? pdfError.message : String(pdfError),
+            }
+          )
+        }
+      } else {
+        contexts.push(`[Unsupported file type: ${storagePath.split('.').pop()}]`)
       }
     } catch (error) {
-      console.error(`Error processing file ${storagePath}:`, error)
+      // Re-throw PDFProcessingError so caller can handle it
+      if (error instanceof PDFProcessingError) {
+        throw error
+      }
+      
+      // Log and continue for other errors
+      console.error(`[File Processing] Unexpected error processing ${storagePath}:`, error)
       contexts.push(`[Error processing file: ${storagePath}]`)
     }
   }
@@ -483,17 +849,32 @@ async function getImageUrls(supabase: any, fileUrls: string[]): Promise<string[]
 /**
  * Build system prompt for the Copilot AI
  */
-function buildSystemPrompt(currentLineItems: any[], project: { title: string }, fileContext?: string): string {
+function buildSystemPrompt(
+  currentLineItems: any[],
+  project: { title: string },
+  fileContext?: string,
+  existingRooms: Array<{ id: string; name: string; type: string | null; is_active: boolean }> = []
+): string {
   const lineItemsSummary = currentLineItems.length > 0
     ? currentLineItems.map(item => 
         `- ${item.description || 'Untitled'} (${item.cost_code || 'N/A'}, ${item.room_name || 'General'})`
       ).join('\n')
     : 'No line items yet.'
 
+  const roomsSummary = existingRooms.length > 0
+    ? existingRooms.map(room => 
+        `- ${room.name}${room.type ? ` (${room.type})` : ''}`
+      ).join('\n')
+    : 'No rooms defined yet.'
+
   const fileContextSection = fileContext 
     ? `\n\nATTACHED FILES CONTEXT:
 ${fileContext}`
     : ''
+
+  const roomsSection = `\n\nEXISTING ROOMS IN THIS PROJECT:
+${roomsSummary}
+When adding line items, use these room names exactly as shown. If a user mentions a room that doesn't exist, create it first with add_room action.`
 
   return `You are Estimatix Copilot, an AI assistant for construction project estimating.
 
@@ -501,7 +882,7 @@ PROJECT CONTEXT:
 Project: ${project.title}
 
 CURRENT LINE ITEMS:
-${lineItemsSummary}${fileContextSection}
+${lineItemsSummary}${roomsSection}${fileContextSection}
 
 YOUR ROLE:
 You help contractors manage their project estimates by:
@@ -509,9 +890,20 @@ You help contractors manage their project estimates by:
 2. Adding new line items when requested (including from images and PDFs)
 3. Updating existing line items
 4. Deleting line items when requested
-5. Providing helpful information and suggestions
-6. Analyzing images to identify construction work items, materials, and scope
-7. Extracting line items from PDF documents (blueprints, specs, quotes, etc.)
+5. Managing rooms - creating rooms, organizing items into rooms, and hiding rooms
+6. Providing helpful information and suggestions
+7. Analyzing images to identify construction work items, materials, and scope
+8. Extracting line items from PDF documents (blueprints, specs, quotes, etc.)
+
+ROOM MANAGEMENT (CRITICAL):
+- ALWAYS group line items into rooms whenever possible. Rooms help organize estimates by location.
+- When a user mentions a new room (e.g., "Add a master bath", "We're doing the kitchen", "Master bedroom needs..."), you should:
+  1. First call add_room action to create the room
+  2. Then add line items to that room using room_name in add_line_item
+- When a user says they're not doing a room anymore (e.g., "We aren't doing the kitchen anymore", "Skip the master bath"), use hide_room action
+- When adding line items, always specify a room_name. Use specific room names like "Kitchen", "Master Bedroom", "Primary Bath", etc.
+- If room is unclear, use "General" as fallback
+- The system will automatically match room names to existing rooms (fuzzy matching) or create new ones if needed
 
 CRITICAL RULES - FOLLOW STRICTLY:
 
@@ -644,7 +1036,7 @@ You MUST return valid JSON with this structure:
   "response_text": "Your natural language response to the user",
   "actions": [
     {
-      "type": "add_line_item" | "update_line_item" | "delete_line_item" | "info",
+      "type": "add_line_item" | "update_line_item" | "delete_line_item" | "add_room" | "hide_room" | "info",
       "data": { ...action-specific data... }
     }
   ]
@@ -689,7 +1081,9 @@ ACTION TYPES:
        "description": "Clear, detailed description preserving ALL specifics (brands, models, subcontractors, materials). For allowances, prefix with 'ALLOWANCE:'",
        "category": "Short category name (e.g., 'Plumbing', 'Electrical', 'Windows', 'Tile', etc.)",
        "cost_code": "MOST SPECIFIC cost code from the list above (e.g., '406' for Prefab Fireplaces, '715' for Fireplace Mantle, NOT generic codes)",
-       "room": "Room name or 'General'",
+       "room": "Room name (e.g., 'Kitchen', 'Master Bedroom', 'Primary Bath') or 'General' if unclear",
+       "room_name": "Same as room field (for backward compatibility)",
+       "room_id": "Optional - UUID of room if you know it (usually omit this, system will resolve room_name)",
        "quantity": number (optional),
        "unit": "EA" | "SF" | "LF" | "SQ" | "ROOM" (optional),
        "unitCost": number (REQUIRED ONLY if user specifies a price - set to exact amount and include pricing_source: "manual"),
@@ -734,7 +1128,29 @@ ACTION TYPES:
      }
    }
 
-4. "info":
+4. "add_room":
+   {
+     "type": "add_room",
+     "data": {
+       "name": "Room name (e.g., 'Master Bedroom', 'Kitchen', 'Primary Bath')",
+       "type": "Optional room type (e.g., 'bedroom', 'kitchen', 'bathroom')",
+       "area_sqft": number (optional - square footage if mentioned),
+       "notes": "Optional notes about the room"
+     }
+   }
+   Use this when the user mentions creating a new room or working on a room that doesn't exist yet.
+
+5. "hide_room":
+   {
+     "type": "hide_room",
+     "data": {
+       "room_name": "Name of the room to hide (e.g., 'Kitchen', 'Master Bedroom')"
+     }
+   }
+   Use this when the user says they're not doing a room anymore, want to skip it, or remove it from scope.
+   This hides the room and all its line items without deleting them.
+
+6. "info":
    {
      "type": "info",
      "data": {
@@ -908,6 +1324,10 @@ async function executeActions(
         case 'add_line_item': {
           const { data } = action
           
+          // Resolve room_name to room_id
+          const roomName = data.room_name || data.room || 'General'
+          const roomId = await resolveRoomName(roomName, projectId, supabase)
+          
           // Check if this is an allowance BEFORE applying pricing
           const isAllowance = data.is_allowance === true || 
             (data.description || '').toUpperCase().trim().startsWith('ALLOWANCE:')
@@ -927,7 +1347,7 @@ async function executeActions(
               description: data.description || '',
               category: data.category || 'Other',
               cost_code: data.cost_code || null,
-              room_name: data.room || 'General',
+              room_name: roomName,
               quantity: quantity,
               unit: data.unit || null,
               labor_cost: 0,
@@ -946,7 +1366,7 @@ async function executeActions(
               description: data.description || '',
               category: data.category || 'Other',
               cost_code: data.cost_code || null,
-              room_name: data.room || 'General',
+              room_name: roomName,
               quantity: data.quantity || 1,
               unit: data.unit || null,
               unitCost: data.unitCost,
@@ -1019,7 +1439,8 @@ async function executeActions(
             description: pricedItem.description,
             category: pricedItem.category,
             cost_code: pricedItem.cost_code,
-            room_name: pricedItem.room_name,
+            room_name: roomName, // Keep room_name for backward compatibility
+            room_id: roomId, // Use resolved room_id
             quantity: pricedItem.quantity,
             unit: pricedItem.unit,
             labor_cost: laborCost,
@@ -1029,7 +1450,8 @@ async function executeActions(
             client_price: clientPrice,
             is_allowance: isAllowance,
             pricing_source: pricedItem.pricing_source || 'ai',
-            confidence: pricedItem.confidence || data.confidence || null
+            confidence: pricedItem.confidence || data.confidence || null,
+            is_active: true
           }
           
           // Add task_library_id if available
@@ -1059,7 +1481,15 @@ async function executeActions(
           if (data.description !== undefined) updateData.description = data.description
           if (data.category !== undefined) updateData.category = data.category
           if (data.cost_code !== undefined) updateData.cost_code = data.cost_code
-          if (data.room !== undefined) updateData.room_name = data.room
+          if (data.room !== undefined || data.room_name !== undefined) {
+            const roomName = data.room_name || data.room
+            updateData.room_name = roomName
+            // Resolve room_name to room_id
+            const roomId = await resolveRoomName(roomName, projectId, supabase)
+            if (roomId) {
+              updateData.room_id = roomId
+            }
+          }
           if (data.quantity !== undefined) updateData.quantity = data.quantity
           if (data.unit !== undefined) updateData.unit = data.unit
           if (data.notes !== undefined) updateData.notes = data.notes
@@ -1104,6 +1534,96 @@ async function executeActions(
           } else {
             results.push({ type: 'delete_line_item', success: true, id: data.line_item_id })
           }
+          break
+        }
+
+        case 'add_room': {
+          const { data } = action
+          if (!data.name || !data.name.trim()) {
+            results.push({ type: 'add_room', success: false, error: 'Missing room name' })
+            break
+          }
+
+          const roomId = await createRoom(data.name.trim(), projectId, supabase)
+          
+          if (!roomId) {
+            results.push({ type: 'add_room', success: false, error: 'Failed to create room' })
+            break
+          }
+
+          // Update room with optional fields if provided
+          const updateData: any = {}
+          if (data.type) updateData.type = data.type.trim()
+          if (data.area_sqft !== undefined && data.area_sqft !== null) {
+            updateData.area_sqft = typeof data.area_sqft === 'number' ? data.area_sqft : parseFloat(data.area_sqft)
+          }
+          if (data.notes) updateData.notes = data.notes.trim()
+
+          if (Object.keys(updateData).length > 0) {
+            await supabase
+              .from('rooms')
+              .update(updateData)
+              .eq('id', roomId)
+          }
+
+          results.push({ type: 'add_room', success: true, id: roomId })
+          break
+        }
+
+        case 'hide_room': {
+          const { data } = action
+          if (!data.room_name || !data.room_name.trim()) {
+            results.push({ type: 'hide_room', success: false, error: 'Missing room_name' })
+            break
+          }
+
+          // Find room by name (fuzzy match)
+          const { data: rooms, error: fetchError } = await supabase
+            .from('rooms')
+            .select('id, name')
+            .eq('project_id', projectId)
+            .eq('is_active', true)
+
+          if (fetchError || !rooms || rooms.length === 0) {
+            results.push({ type: 'hide_room', success: false, error: 'Room not found' })
+            break
+          }
+
+          // Fuzzy match room name
+          const roomName = data.room_name.trim()
+          let matchedRoom: { id: string; score: number } | null = null
+          const threshold = 0.7
+
+          for (const room of rooms) {
+            const score = fuzzyScore(roomName.toLowerCase(), room.name.toLowerCase())
+            if (score >= threshold && (!matchedRoom || score > matchedRoom.score)) {
+              matchedRoom = { id: room.id, score }
+            }
+          }
+
+          if (!matchedRoom) {
+            results.push({ type: 'hide_room', success: false, error: `Room "${roomName}" not found` })
+            break
+          }
+
+          // Hide the room (set is_active = false)
+          const { error: updateError } = await supabase
+            .from('rooms')
+            .update({ is_active: false })
+            .eq('id', matchedRoom.id)
+
+          if (updateError) {
+            results.push({ type: 'hide_room', success: false, error: `Failed to hide room: ${updateError.message}` })
+            break
+          }
+
+          // Cascade: Hide all line items linked to this room
+          await supabase
+            .from('estimate_line_items')
+            .update({ is_active: false })
+            .eq('room_id', matchedRoom.id)
+
+          results.push({ type: 'hide_room', success: true, id: matchedRoom.id })
           break
         }
 

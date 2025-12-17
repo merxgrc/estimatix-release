@@ -18,3 +18,5 @@ COMMENT ON COLUMN public.estimate_line_items.allowance_amount IS 'The allowance 
 COMMENT ON COLUMN public.estimate_line_items.subcontractor IS 'Subcontractor name for allowance items (e.g., "Pacific Hearth & Home").';
 COMMENT ON COLUMN public.estimate_line_items.allowance_notes IS 'Additional notes or context about the allowance.';
 
+
+
