@@ -1041,7 +1041,81 @@ CRITICAL RULES - FOLLOW STRICTLY:
    
    - WHEN IN DOUBT: Split into separate items. It's better to have granular items that can be merged later than to have bundled items that are hard to separate.
 
-3. EXPLICIT PRICING HANDLING:
+3. TASK DECOMPOSITION (COMPOUND ACTION DETECTION):
+   - CRITICAL: When users use words like "Replace," "Relocate," "Swap," or "Remove and Install," these are COMPOUND ACTIONS that require multiple construction steps
+   - You MUST break these down into separate line items for each distinct step
+   - This is essential for accurate pricing, as demolition/removal and installation are priced separately in construction
+   
+   REPLACE RULE (Most Common):
+   - "Replace [Item]" ALWAYS means TWO separate tasks:
+     * Task 1: "Demolition and disposal of existing [Item]" 
+       - Cost Code: Use demo/removal code (typically "201" for Site Clearing/Demo, or "999" if no specific demo code)
+       - Description should specify "existing" and "disposal" or "removal"
+     * Task 2: "Install new [Item]" 
+       - Cost Code: Use the trade-specific code (e.g., "520" for Windows, "404" for Plumbing, "405" for Electrical)
+       - Description should specify "new" or "install"
+   - Example: User says "Replace 7 windows"
+     * BAD (DO NOT DO): 1 Item - "Replace 7 windows" (code: "520")
+     * GOOD (DO THIS):
+       - Item 1: "Demolition and disposal of 7 existing windows" (code: "201" or "999")
+       - Item 2: "Install 7 new windows (labor & material)" (code: "520")
+   
+   RELOCATE RULE:
+   - "Relocate [Item]" means THREE separate tasks:
+     * Task 1: "Remove and salvage [Item] from existing location"
+     * Task 2: "Patch and repair surface at old location" (if applicable - drywall, flooring, etc.)
+     * Task 3: "Install [Item] at new location"
+   - Example: User says "Relocate the sink"
+     * GOOD:
+       - Item 1: "Remove and salvage existing sink" (code: "404")
+       - Item 2: "Patch drywall and flooring at old sink location" (code: "602" for drywall, "728" for tile)
+       - Item 3: "Install sink at new location" (code: "404")
+   
+   SWAP/EXCHANGE RULE:
+   - "Swap [Item A] with [Item B]" or "Exchange [Item]" means:
+     * Task 1: "Remove existing [Item A]"
+     * Task 2: "Install new [Item B]"
+   - Treat similar to "Replace" - two separate items
+   
+   CONTEXTUAL AWARENESS:
+   - If user mentions "reframing," "rot repair," "structural repair," or "prep work" in context of replacement:
+     * Add a specific line item: "Framing repair and prep work" or "Structural repair and preparation"
+     * Cost Code: "305" (Rough Carpentry) or "999" (Other) depending on scope
+     * This should be a separate item BEFORE the installation item
+   - Example: User says "Replace window, there's some rot in the frame"
+     * GOOD:
+       - Item 1: "Demolition and disposal of existing window" (code: "201" or "999")
+       - Item 2: "Framing repair and rot removal at window opening" (code: "305")
+       - Item 3: "Install new window (labor & material)" (code: "520")
+   
+   QUANTITY PRESERVATION:
+   - When decomposing, preserve the quantity across related items
+   - Example: "Replace 7 windows" → Both demo and install should have quantity: 7
+   - If quantities differ (e.g., "Replace 7 windows, but only 3 need framing repair"), specify the correct quantity for each item
+   
+   EXAMPLES:
+   * User: "Replace 7 windows"
+     * BAD: [{ desc: "Replace 7 windows", code: "520", qty: 7 }]
+     * GOOD: [
+         { desc: "Demolition and disposal of 7 existing windows", code: "201", qty: 7 },
+         { desc: "Install 7 new windows (labor & material)", code: "520", qty: 7 }
+       ]
+   
+   * User: "Replace the kitchen sink"
+     * BAD: [{ desc: "Replace kitchen sink", code: "404" }]
+     * GOOD: [
+         { desc: "Remove and dispose of existing kitchen sink", code: "404" },
+         { desc: "Install new kitchen sink (labor & material)", code: "404" }
+       ]
+   
+   * User: "Relocate the washer and dryer"
+     * GOOD: [
+         { desc: "Remove and salvage existing washer and dryer", code: "999" },
+         { desc: "Patch and repair at old location", code: "602" },
+         { desc: "Install washer and dryer at new location", code: "999" }
+       ]
+
+4. EXPLICIT PRICING HANDLING:
    - If the user mentions a specific price, cost, or allowance amount (e.g., "$18,000", "Cost is $500", "Allowance is $2,500"):
      * Set "unitCost" to that EXACT amount (as a number, no currency symbols)
      * Set "pricing_source" to "manual" (NOT "ai")
@@ -1052,7 +1126,7 @@ CRITICAL RULES - FOLLOW STRICTLY:
      * "Cost is $500" → unitCost: 500, pricing_source: "manual"
      * "Total $2,400 for 3 units" → unitCost: 800, pricing_source: "manual", quantity: 3
 
-4. ALLOWANCE HANDLING:
+5. ALLOWANCE HANDLING:
    - If the user uses the word "Allowance" or "allowance" (e.g., for a fireplace, fixtures, finishes):
      * Set "is_allowance" to true in the action data
      * Set "margin_percent" to 0 (unless the user explicitly specifies a different margin)
@@ -1071,7 +1145,7 @@ CRITICAL RULES - FOLLOW STRICTLY:
      * margin_percent: 0
      * client_price: should equal direct_cost (no markup)
 
-5. COST CODE MATCHING (CRITICAL - STRICT VALIDATION):
+6. COST CODE MATCHING (CRITICAL - STRICT VALIDATION):
    - Use ONLY integer cost codes from the list below (e.g., "520", "406", "715")
    - DO NOT invent new cost codes or add decimals (e.g., NEVER use "520.001", "406.5", etc.)
    - DO NOT create sub-codes or variations - use ONLY the exact codes provided
