@@ -1,18 +1,20 @@
 'use client'
 
 import { useState, useRef, useEffect, useOptimistic, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { Mic, Paperclip, Send, Loader2, X, FileImage, FileText } from 'lucide-react'
+import { Mic, Paperclip, Send, Loader2, X, FileImage, FileText, Square } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { supabase } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/auth-context'
 import { toast } from 'sonner'
+import { useVoiceChat } from '@/hooks/use-voice-chat'
 import type { ChatMessage } from '@/types/db'
 
 interface CopilotChatProps {
   projectId: string
-  onSendMessage?: (content: string, fileUrls?: string[]) => Promise<void>
+  onSendMessage?: (content: string, fileUrls?: string[]) => Promise<{ response_text: string; actions?: any[] } | undefined>
   onVoiceRecord?: () => void
   onFileAttach?: () => void
   className?: string
@@ -52,6 +54,18 @@ export function CopilotChat({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { user } = useAuth()
+  const router = useRouter()
+
+  // Voice chat hook (simple dictation)
+  const {
+    isRecording,
+    isTranscribing,
+    transcript,
+    error: voiceError,
+    startRecording,
+    stopRecording,
+    resetTranscript,
+  } = useVoiceChat()
 
   // Auto-resize textarea
   useEffect(() => {
@@ -210,6 +224,44 @@ export function CopilotChat({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [optimisticMessages])
 
+  // Append transcript to input when it becomes available
+  useEffect(() => {
+    // Only run if we actually have text to append
+    if (transcript && transcript.trim()) {
+      console.log('[CopilotChat] Appending transcript:', transcript)
+      
+      setInputValue((prev) => {
+        // Careful not to double-add if it's already there (optional check)
+        const cleanPrev = prev.trim()
+        const newValue = cleanPrev ? `${cleanPrev} ${transcript}` : transcript
+        console.log('[CopilotChat] Input updated:', { prev: cleanPrev, newValue })
+        return newValue
+      })
+
+      // Focus textarea so user can review/edit before sending
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+      }
+
+      // CRITICAL: Clear the transcript immediately to prevent the infinite loop
+      resetTranscript()
+    }
+  }, [transcript, resetTranscript])
+
+  // Debug: Log state changes
+  useEffect(() => {
+    console.log('[CopilotChat] Voice state changed:', { isRecording, isTranscribing, hasTranscript: !!transcript, transcriptLength: transcript.length })
+  }, [isRecording, isTranscribing, transcript])
+
+  // Show error toast if transcription fails
+  useEffect(() => {
+    if (voiceError) {
+      toast.error('Voice recording error', {
+        description: voiceError,
+      })
+    }
+  }, [voiceError])
+
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files
     if (!files || files.length === 0 || !user) return
@@ -357,7 +409,44 @@ export function CopilotChat({
     setIsSubmitting(true)
     try {
       if (onSendMessage) {
-        await onSendMessage(messageContent, fileUrls.length > 0 ? fileUrls : undefined)
+        const result = await onSendMessage(messageContent, fileUrls.length > 0 ? fileUrls : undefined)
+        
+        // IMMEDIATE UI UPDATE: Add assistant's response to messages immediately
+        if (result && typeof result === 'object' && 'response_text' in result) {
+          const responseData = result as { response_text: string; actions?: any[] }
+          console.log('[CopilotChat] Adding assistant response immediately:', responseData.response_text)
+          const assistantMessage: ChatMessage = {
+            id: `temp-assistant-${Date.now()}`,
+            project_id: projectId,
+            role: 'assistant',
+            content: responseData.response_text,
+            related_action: responseData.actions ? JSON.stringify(responseData.actions) : null,
+            created_at: new Date().toISOString()
+          }
+          
+          setMessages(prev => {
+            // Remove any duplicate optimistic assistant messages
+            const filtered = prev.filter(m => 
+              !(m.role === 'assistant' && 
+                m.id.startsWith('temp-assistant-') &&
+                Math.abs(new Date(m.created_at).getTime() - new Date(assistantMessage.created_at).getTime()) < 5000)
+            )
+            return [...filtered, assistantMessage]
+          })
+
+          // Refresh server components to update Estimates tab and other dashboard data
+          startTransition(() => {
+            router.refresh()
+          })
+
+          // Dispatch global event to trigger client-side data refresh
+          // Add a small delay to ensure database transaction has committed
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('estimate-updated'))
+            console.log('[CopilotChat] Dispatched estimate-updated event')
+          }, 500)
+        }
+        
         // After successful send, the parent should update messages via props
         // The optimistic message will be replaced with the real one when messages update
       }
@@ -567,12 +656,46 @@ export function CopilotChat({
           <Button
             variant="ghost"
             size="icon"
-            onClick={onVoiceRecord}
-            className="h-11 w-11 shrink-0"
-            disabled={isSubmitting || isUploadingFile}
+            type="button"
+            onClick={async (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              
+              console.log('[CopilotChat] Mic button clicked', { isRecording, isTranscribing })
+              
+              try {
+                if (isRecording) {
+                  console.log('[CopilotChat] Calling stopRecording...')
+                  await stopRecording()
+                  console.log('[CopilotChat] stopRecording completed')
+                } else {
+                  console.log('[CopilotChat] Calling startRecording...')
+                  await startRecording()
+                  console.log('[CopilotChat] startRecording completed, isRecording should be true')
+                }
+              } catch (error) {
+                console.error('[CopilotChat] Recording error:', error)
+                toast.error('Failed to start recording. Please check your microphone permissions.')
+              }
+            }}
+            className={cn(
+              'h-11 w-11 shrink-0',
+              isRecording && 'bg-destructive text-destructive-foreground animate-pulse',
+              isTranscribing && 'opacity-50'
+            )}
+            disabled={isSubmitting || isUploadingFile || isTranscribing}
           >
-            <Mic className="h-5 w-5" />
-            <span className="sr-only">Voice input</span>
+            {/* Always render the same button structure, just change icon/style */}
+            {isTranscribing ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : isRecording ? (
+              <Square className="h-5 w-5" />
+            ) : (
+              <Mic className="h-5 w-5" />
+            )}
+            <span className="sr-only">
+              {isTranscribing ? 'Transcribing...' : isRecording ? 'Stop recording' : 'Voice input'}
+            </span>
           </Button>
           <Button
             onClick={handleSend}

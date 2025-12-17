@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -123,130 +123,148 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     loadCostCodes()
   }, [])
 
-  // Load line items from database on mount
-  useEffect(() => {
-    const loadLineItems = async () => {
-      if (estimateId && projectId) {
-        try {
-          const { data, error } = await supabase
-            .from('estimate_line_items')
-            .select('*')
-            .eq('estimate_id', estimateId)
-            .order('created_at', { ascending: true })
+  // Extract loadLineItems to a reusable function
+  const loadLineItems = useCallback(async () => {
+    if (estimateId && projectId) {
+      try {
+        const { data, error } = await supabase
+          .from('estimate_line_items')
+          .select('*')
+          .eq('estimate_id', estimateId)
+          .order('created_at', { ascending: true })
 
-          if (error) {
-            console.error('Error loading line items:', error)
-            // Fallback to initialData if database load fails - preserve room_name and cost_code
-            if (initialData?.items) {
-              setItems(initialData.items.map((item, idx) => ({
-                id: `temp-${idx}`,
-                room_name: item.room_name || 'General',
-                description: item.description || '',
-                category: item.category || 'Other',
-                cost_code: item.cost_code || null, // Preserve cost_code from initialData, don't force 999
-                quantity: item.quantity ?? 1,
-                unit: item.unit || 'EA',
-                labor_cost: item.labor_cost || 0,
-                margin_percent: item.margin_percent || 0,
-                client_price: item.client_price || 0
-              })))
-            }
-            return
-          }
-
-          if (data && data.length > 0) {
-            // Load from database - preserve room_name from database
-            const loadedItems = data.map(item => {
-              const isAllowance = item.is_allowance || (item.description || '').toUpperCase().startsWith('ALLOWANCE:')
-              // For allowances, ensure client_price equals direct_cost
-              let clientPrice = item.client_price || 0
-              const directCost = item.direct_cost || 0
-              if (isAllowance && directCost > 0 && clientPrice === 0) {
-                clientPrice = directCost
-              }
-              
-              return {
-                id: item.id,
-                room_name: item.room_name || '', // Preserve room_name from database
-                description: item.description || '',
-                category: item.category || costCodes.find(c => c.code === item.cost_code)?.label || 'Other',
-                cost_code: item.cost_code || null, // Preserve cost_code from database, don't force 999
-                quantity: item.quantity || 1,
-                unit: item.unit || 'EA',
-                labor_cost: item.labor_cost || 0,
-                material_cost: item.material_cost || 0,
-                overhead_cost: item.overhead_cost || 0,
-                direct_cost: directCost,
-                margin_percent: isAllowance ? 0 : (item.margin_percent || 30), // Allowances have 0% margin
-                client_price: clientPrice,
-                pricing_source: item.pricing_source || null,
-                confidence: item.confidence ?? null,
-                is_allowance: isAllowance
-              }
-            })
-            setItems(loadedItems)
-            
-            // Store original values for reset functionality (only if from AI pricing)
-            loadedItems.forEach(item => {
-              if (item.id && (item.pricing_source === 'task_library' || item.pricing_source === 'user_library')) {
-                originalValuesRef.current.set(item.id, {
-                  labor_cost: item.labor_cost,
-                  material_cost: item.material_cost,
-                  overhead_cost: item.overhead_cost,
-                  direct_cost: item.direct_cost,
-                  margin_percent: item.margin_percent,
-                  client_price: item.client_price,
-                  pricing_source: item.pricing_source
-                } as Partial<LineItem>)
-              }
-            })
-          } else if (initialData?.items) {
-            // Fallback to initialData - preserve room_name and cost_code from initialData
+        if (error) {
+          console.error('Error loading line items:', error)
+          // Fallback to initialData if database load fails - preserve room_name and cost_code
+          if (initialData?.items) {
             setItems(initialData.items.map((item, idx) => ({
               id: `temp-${idx}`,
-              room_name: item.room_name || 'General', // Preserve room_name from initialData
+              room_name: item.room_name || 'General',
               description: item.description || '',
               category: item.category || 'Other',
               cost_code: item.cost_code || null, // Preserve cost_code from initialData, don't force 999
-              quantity: (item as any).quantity || 1,
-              unit: (item as any).unit || 'EA',
-              labor_cost: (item as any).labor_cost || 0,
-              material_cost: (item as any).material_cost || 0,
-              overhead_cost: (item as any).overhead_cost || 0,
-              direct_cost: (item as any).direct_cost || 0,
-              margin_percent: (item as any).margin_percent || 30,
-              client_price: (item as any).client_price || 0,
-              pricing_source: (item as any).pricing_source || null,
-              confidence: (item as any).confidence ?? null
+              quantity: item.quantity ?? 1,
+              unit: item.unit || 'EA',
+              labor_cost: item.labor_cost || 0,
+              margin_percent: item.margin_percent || 0,
+              client_price: item.client_price || 0
             })))
           }
-        } catch (err) {
-          console.error('Error in loadLineItems:', err)
+          return
         }
-      } else if (initialData?.items) {
-        // Use initialData if no estimateId - preserve room_name from initialData
-        setItems(initialData.items.map((item, idx) => ({
-          id: `temp-${idx}`,
-          room_name: (item as any).room_name || '', // Preserve room_name from initialData
-          description: item.description || '',
-          category: item.category || 'Other (999)',
-          cost_code: '999',
-          quantity: (item as any).quantity || 1,
-          unit: (item as any).unit || 'EA',
-          labor_cost: (item as any).labor_cost || 0,
-          material_cost: (item as any).material_cost || 0,
-          overhead_cost: (item as any).overhead_cost || 0,
-          direct_cost: (item as any).direct_cost || 0,
-          margin_percent: (item as any).margin_percent || 30,
-          client_price: (item as any).client_price || 0,
-          pricing_source: (item as any).pricing_source || null,
-          confidence: (item as any).confidence ?? null
-        })))
+
+        if (data && data.length > 0) {
+          // Load from database - preserve room_name from database
+          const loadedItems = data.map(item => {
+            const isAllowance = item.is_allowance || (item.description || '').toUpperCase().startsWith('ALLOWANCE:')
+            // For allowances, ensure client_price equals direct_cost
+            let clientPrice = item.client_price || 0
+            const directCost = item.direct_cost || 0
+            if (isAllowance && directCost > 0 && clientPrice === 0) {
+              clientPrice = directCost
+            }
+            
+            return {
+              id: item.id,
+              room_name: item.room_name || '', // Preserve room_name from database
+              description: item.description || '',
+              category: item.category || costCodes.find(c => c.code === item.cost_code)?.label || 'Other',
+              cost_code: item.cost_code || null, // Preserve cost_code from database, don't force 999
+              quantity: item.quantity || 1,
+              unit: item.unit || 'EA',
+              labor_cost: item.labor_cost || 0,
+              material_cost: item.material_cost || 0,
+              overhead_cost: item.overhead_cost || 0,
+              direct_cost: directCost,
+              margin_percent: isAllowance ? 0 : (item.margin_percent || 30), // Allowances have 0% margin
+              client_price: clientPrice,
+              pricing_source: item.pricing_source || null,
+              confidence: item.confidence ?? null,
+              is_allowance: isAllowance
+            }
+          })
+          setItems(loadedItems)
+          console.log('[EstimateTable] Loaded', loadedItems.length, 'line items from database')
+          
+          // Store original values for reset functionality (only if from AI pricing)
+          loadedItems.forEach(item => {
+            if (item.id && (item.pricing_source === 'task_library' || item.pricing_source === 'user_library')) {
+              originalValuesRef.current.set(item.id, {
+                labor_cost: item.labor_cost,
+                material_cost: item.material_cost,
+                overhead_cost: item.overhead_cost,
+                direct_cost: item.direct_cost,
+                margin_percent: item.margin_percent,
+                client_price: item.client_price,
+                pricing_source: item.pricing_source
+              } as Partial<LineItem>)
+            }
+          })
+        } else if (initialData?.items) {
+          // Fallback to initialData - preserve room_name and cost_code from initialData
+          setItems(initialData.items.map((item, idx) => ({
+            id: `temp-${idx}`,
+            room_name: item.room_name || 'General', // Preserve room_name from initialData
+            description: item.description || '',
+            category: item.category || 'Other',
+            cost_code: item.cost_code || null, // Preserve cost_code from initialData, don't force 999
+            quantity: (item as any).quantity || 1,
+            unit: (item as any).unit || 'EA',
+            labor_cost: (item as any).labor_cost || 0,
+            material_cost: (item as any).material_cost || 0,
+            overhead_cost: (item as any).overhead_cost || 0,
+            direct_cost: (item as any).direct_cost || 0,
+            margin_percent: (item as any).margin_percent || 30,
+            client_price: (item as any).client_price || 0,
+            pricing_source: (item as any).pricing_source || null,
+            confidence: (item as any).confidence ?? null
+          })))
+        }
+      } catch (err) {
+        console.error('Error in loadLineItems:', err)
       }
+    } else if (initialData?.items) {
+      // Use initialData if no estimateId - preserve room_name from initialData
+      setItems(initialData.items.map((item, idx) => ({
+        id: `temp-${idx}`,
+        room_name: (item as any).room_name || '', // Preserve room_name from initialData
+        description: item.description || '',
+        category: item.category || 'Other (999)',
+        cost_code: '999',
+        quantity: (item as any).quantity || 1,
+        unit: (item as any).unit || 'EA',
+        labor_cost: (item as any).labor_cost || 0,
+        material_cost: (item as any).material_cost || 0,
+        overhead_cost: (item as any).overhead_cost || 0,
+        direct_cost: (item as any).direct_cost || 0,
+        margin_percent: (item as any).margin_percent || 30,
+        client_price: (item as any).client_price || 0,
+        pricing_source: (item as any).pricing_source || null,
+        confidence: (item as any).confidence ?? null
+      })))
+    }
+  }, [estimateId, projectId, initialData, costCodes])
+
+  // Load line items from database on mount and when dependencies change
+  useEffect(() => {
+    loadLineItems()
+  }, [loadLineItems])
+
+  // Listen for estimate-updated event to refetch line items
+  useEffect(() => {
+    const handleEstimateUpdate = () => {
+      console.log('[EstimateTable] Received estimate-updated event, refetching line items...')
+      // Add a small delay to ensure database transaction has committed
+      setTimeout(() => {
+        loadLineItems()
+      }, 300)
     }
 
-    loadLineItems()
-  }, [estimateId, projectId, initialData])
+    window.addEventListener('estimate-updated', handleEstimateUpdate)
+    return () => {
+      window.removeEventListener('estimate-updated', handleEstimateUpdate)
+    }
+  }, [loadLineItems])
 
   // Update items when initialData changes
   useEffect(() => {

@@ -503,6 +503,78 @@ async function createRoom(
 /**
  * Enrich add_line_item actions with pricing from the task library
  */
+/**
+ * Validate and normalize a cost code
+ * - Checks if the code exists in task_library
+ * - If invalid, strips decimals and checks parent code
+ * - Falls back to "999" (Unclassified) if parent is also invalid
+ */
+async function validateAndNormalizeCostCode(
+  costCode: string | null | undefined,
+  supabase: any
+): Promise<string | null> {
+  if (!costCode || typeof costCode !== 'string' || costCode.trim() === '') {
+    return null
+  }
+
+  const trimmedCode = costCode.trim()
+
+  // First, check if the code exists as-is
+  const { data: exactMatch } = await supabase
+    .from('task_library')
+    .select('cost_code')
+    .eq('cost_code', trimmedCode)
+    .limit(1)
+    .single()
+
+  if (exactMatch) {
+    return trimmedCode
+  }
+
+  // If code has decimals (e.g., "520.001"), strip them and check parent
+  if (trimmedCode.includes('.')) {
+    const parentCode = trimmedCode.split('.')[0]
+    console.log(`[Cost Code Validation] Invalid code "${trimmedCode}" detected, checking parent "${parentCode}"`)
+
+    const { data: parentMatch } = await supabase
+      .from('task_library')
+      .select('cost_code')
+      .eq('cost_code', parentCode)
+      .limit(1)
+      .single()
+
+    if (parentMatch) {
+      console.log(`[Cost Code Validation] Using parent code "${parentCode}" instead of "${trimmedCode}"`)
+      return parentCode
+    }
+  }
+
+  // If parent code also doesn't exist, check if it's a valid integer code
+  // (Some codes might be valid but not in task_library yet)
+  const numericCode = trimmedCode.replace(/[^0-9]/g, '')
+  if (numericCode && numericCode.length <= 3) {
+    // Check if it's a standard code (100-999 range)
+    const codeNum = parseInt(numericCode, 10)
+    if (codeNum >= 100 && codeNum <= 999) {
+      const { data: numericMatch } = await supabase
+        .from('task_library')
+        .select('cost_code')
+        .eq('cost_code', numericCode)
+        .limit(1)
+        .single()
+
+      if (numericMatch) {
+        console.log(`[Cost Code Validation] Using numeric code "${numericCode}" instead of "${trimmedCode}"`)
+        return numericCode
+      }
+    }
+  }
+
+  // Fallback to "999" (Unclassified) if nothing valid found
+  console.warn(`[Cost Code Validation] Invalid code "${trimmedCode}" not found in task_library, falling back to "999"`)
+  return '999'
+}
+
 async function enrichActionsWithPricing(
   actions: Array<{ type: string; data: any }>,
   userId: string,
@@ -532,10 +604,15 @@ async function enrichActionsWithPricing(
         continue
       }
       
+      // Validate and normalize cost code BEFORE matching
+      if (data.cost_code) {
+        data.cost_code = await validateAndNormalizeCostCode(data.cost_code, supabase)
+      }
+
       // Only enrich if we have a description
       if (data.description) {
         try {
-          // Attempt to match with pricing engine
+          // Attempt to match with pricing engine (using validated cost_code)
           const matchResult = await matchTask({
             description: data.description,
             cost_code: data.cost_code || null,
@@ -994,14 +1071,23 @@ CRITICAL RULES - FOLLOW STRICTLY:
      * margin_percent: 0
      * client_price: should equal direct_cost (no markup)
 
-5. COST CODE MATCHING:
-   - Use the MOST SPECIFIC cost code available that matches the work
-   - Do NOT use generic codes (like "400" or "500") when a specific code exists
+5. COST CODE MATCHING (CRITICAL - STRICT VALIDATION):
+   - Use ONLY integer cost codes from the list below (e.g., "520", "406", "715")
+   - DO NOT invent new cost codes or add decimals (e.g., NEVER use "520.001", "406.5", etc.)
+   - DO NOT create sub-codes or variations - use ONLY the exact codes provided
+   - If a specific code doesn't exist in the list, use the closest parent code (e.g., if "520.001" doesn't exist, use "520")
    - Examples:
-     * "Prefab Fireplace" → Use "406" (Prefab Fireplaces), NOT "400" (MEP ROUGH-INS)
-     * "Fireplace Mantle" → Use "715" (Fireplace Mantle / Trim), NOT "700" (INTERIOR FINISHES)
-     * "Window Install" → Use "520.001" (Window Install), NOT just "520" (Windows)
+     * "Prefab Fireplace" → Use "406" (Prefab Fireplaces), NOT "400" (MEP ROUGH-INS), NOT "406.001"
+     * "Fireplace Mantle" → Use "715" (Fireplace Mantle / Trim), NOT "700" (INTERIOR FINISHES), NOT "715.5"
+     * "Window Install" → Use "520" (Windows), NOT "520.001" or any decimal variation
    - Review all cost codes above to find the best match before defaulting to a general code
+   - If no specific code matches, use "999" (Other/Allowance)
+   
+   COST CODE VALIDATION:
+   - The system will automatically validate all cost codes you provide
+   - Invalid codes (including decimals) will be automatically corrected to valid parent codes
+   - If you provide an invalid code, it will be replaced with "999" (Unclassified)
+   - Always use integer codes only - never add decimals, suffixes, or variations
    
    COST CODE AWARENESS:
    - Always identify which specific cost code you selected for each line item in your internal reasoning
@@ -1080,7 +1166,7 @@ ACTION TYPES:
      "data": {
        "description": "Clear, detailed description preserving ALL specifics (brands, models, subcontractors, materials). For allowances, prefix with 'ALLOWANCE:'",
        "category": "Short category name (e.g., 'Plumbing', 'Electrical', 'Windows', 'Tile', etc.)",
-       "cost_code": "MOST SPECIFIC cost code from the list above (e.g., '406' for Prefab Fireplaces, '715' for Fireplace Mantle, NOT generic codes)",
+       "cost_code": "MOST SPECIFIC INTEGER cost code from the list above (e.g., '406' for Prefab Fireplaces, '715' for Fireplace Mantle, NOT generic codes). MUST be an integer - NO decimals (e.g., use '520', NOT '520.001')",
        "room": "Room name (e.g., 'Kitchen', 'Master Bedroom', 'Primary Bath') or 'General' if unclear",
        "room_name": "Same as room field (for backward compatibility)",
        "room_id": "Optional - UUID of room if you know it (usually omit this, system will resolve room_name)",
@@ -1433,12 +1519,18 @@ async function executeActions(
             }
           }
           
+          // Validate cost_code one more time before inserting (safety check)
+          let validatedCostCode = pricedItem.cost_code
+          if (validatedCostCode) {
+            validatedCostCode = await validateAndNormalizeCostCode(validatedCostCode, supabase)
+          }
+
           const insertData: any = {
             estimate_id: estimateId,
             project_id: projectId,
             description: pricedItem.description,
             category: pricedItem.category,
-            cost_code: pricedItem.cost_code,
+            cost_code: validatedCostCode,
             room_name: roomName, // Keep room_name for backward compatibility
             room_id: roomId, // Use resolved room_id
             quantity: pricedItem.quantity,
@@ -1480,7 +1572,10 @@ async function executeActions(
           const updateData: any = {}
           if (data.description !== undefined) updateData.description = data.description
           if (data.category !== undefined) updateData.category = data.category
-          if (data.cost_code !== undefined) updateData.cost_code = data.cost_code
+          if (data.cost_code !== undefined) {
+            // Validate cost code before updating
+            updateData.cost_code = await validateAndNormalizeCostCode(data.cost_code, supabase)
+          }
           if (data.room !== undefined || data.room_name !== undefined) {
             const roomName = data.room_name || data.room
             updateData.room_name = roomName

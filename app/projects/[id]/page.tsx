@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { Sidebar } from "@/components/sidebar"
 import { Button } from "@/components/ui/button"
@@ -188,6 +188,32 @@ export default function ProjectDetailPage() {
 
     fetchProjectData()
   }, [projectId, user])
+
+  // Create a stable function to fetch estimates only (for event listener)
+  const fetchEstimates = useCallback(async () => {
+    if (!projectId) return
+    
+    try {
+      console.log('[ProjectPage] Received estimate-updated event, refreshing estimates...')
+      const estimatesData = await db.getEstimates(projectId)
+      setEstimates(estimatesData)
+      console.log('[ProjectPage] Estimates refreshed:', estimatesData.length, 'estimates')
+    } catch (err) {
+      console.error('[ProjectPage] Error fetching estimates:', err)
+    }
+  }, [projectId])
+
+  // Listen for estimate-updated event from Copilot
+  useEffect(() => {
+    const handleEstimateUpdate = () => {
+      fetchEstimates()
+    }
+
+    window.addEventListener('estimate-updated', handleEstimateUpdate)
+    return () => {
+      window.removeEventListener('estimate-updated', handleEstimateUpdate)
+    }
+  }, [fetchEstimates])
 
   const handleEstimateSave = (estimateId: string, total: number) => {
     // Refresh estimates list
@@ -711,6 +737,9 @@ export default function ProjectDetailPage() {
       setEstimates(updatedEstimates)
       
       console.log('Copilot response:', result)
+      
+      // Return the result so the component can immediately update UI
+      return result
     } catch (error) {
       console.error('Failed to send message:', error)
       throw error
