@@ -39,8 +39,7 @@ interface SummaryTabProps {
   onDeletePhoto: (id: string) => Promise<void>
   onDeleteDocument: (id: string) => Promise<void>
   onNavigateToEstimate?: () => void
-  onNavigateToPhotos?: () => void
-  onNavigateToDocuments?: () => void
+  onNavigateToFiles?: () => void
 }
 
 export function SummaryTab({
@@ -57,8 +56,7 @@ export function SummaryTab({
   onDeletePhoto,
   onDeleteDocument,
   onNavigateToEstimate,
-  onNavigateToPhotos,
-  onNavigateToDocuments
+  onNavigateToFiles
 }: SummaryTabProps) {
   const router = useRouter()
   const photoInputRef = useRef<HTMLInputElement>(null)
@@ -251,9 +249,9 @@ export function SummaryTab({
     }
   }
 
-  const handlePhotoClick = () => {
-    if (onNavigateToPhotos) {
-      onNavigateToPhotos()
+  const handleFilesClick = () => {
+    if (onNavigateToFiles) {
+      onNavigateToFiles()
     }
   }
 
@@ -453,6 +451,14 @@ export function SummaryTab({
         <Card className="h-full flex flex-col max-h-[600px] min-w-0">
           <CardHeader className="pb-3 flex-shrink-0">
             <CardTitle className="text-lg">Documents</CardTitle>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-2"
+              onClick={handleFilesClick}
+            >
+              View All Files →
+            </Button>
           </CardHeader>
           <CardContent className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {documents.length > 0 ? (
@@ -514,13 +520,21 @@ export function SummaryTab({
         <Card className="h-full flex flex-col max-h-[600px] min-w-0">
           <CardHeader className="pb-3 flex-shrink-0">
             <CardTitle className="text-lg">Photos</CardTitle>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-2"
+              onClick={handleFilesClick}
+            >
+              View All Files →
+            </Button>
           </CardHeader>
           <CardContent className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {photos.length > 0 ? (
               <div className="flex-1 flex items-center justify-center min-h-0">
                 <div
                   className="w-full h-40 md:h-full max-h-[400px] rounded-md overflow-hidden bg-muted cursor-pointer group relative"
-                  onClick={handlePhotoClick}
+                  onClick={handleFilesClick}
                 >
                   <img
                     src={photos[0].url}

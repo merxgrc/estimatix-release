@@ -15,9 +15,7 @@ import { SummaryTab } from "./_components/SummaryTab"
 import { EstimateTab } from "./_components/EstimateTab"
 import { PricingTab } from "./_components/PricingTab"
 import { RoomsTab } from "./_components/RoomsTab"
-import { PhotosTab } from "./_components/PhotosTab"
-import { DocumentsTab } from "./_components/DocumentsTab"
-import { WalkTab } from "./_components/WalkTab"
+import { FilesTab } from "@/components/files/FilesTab"
 import { SpecSheetsTab } from "./_components/SpecSheetsTab"
 import { SelectionsTab } from "./_components/SelectionsTab"
 import { ProposalsTab } from "./_components/ProposalsTab"
@@ -904,15 +902,13 @@ export default function ProjectDetailPage() {
           <main className="p-4 md:p-6">
             {/* Tab Navigation */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="w-full grid grid-cols-12 gap-1">
+              <TabsList className="w-full grid grid-cols-10 gap-1">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="estimate">Estimate</TabsTrigger>
                 <TabsTrigger value="pricing">Pricing</TabsTrigger>
                 <TabsTrigger value="selections">Selections</TabsTrigger>
                 <TabsTrigger value="rooms">Rooms</TabsTrigger>
-                <TabsTrigger value="photos">Photos</TabsTrigger>
-                <TabsTrigger value="documents">Documents</TabsTrigger>
-                <TabsTrigger value="walk">Walk-n-Talk</TabsTrigger>
+                <TabsTrigger value="files">Files</TabsTrigger>
                 <TabsTrigger value="proposals">Proposals</TabsTrigger>
                 <TabsTrigger value="contracts">Contracts</TabsTrigger>
                 <TabsTrigger value="manage">Manage</TabsTrigger>
@@ -932,8 +928,7 @@ export default function ProjectDetailPage() {
                   onDeletePhoto={handleDeletePhoto}
                   onDeleteDocument={handleDeleteDocument}
                   onNavigateToEstimate={() => setActiveTab("estimate")}
-                  onNavigateToPhotos={() => setActiveTab("photos")}
-                  onNavigateToDocuments={() => setActiveTab("documents")}
+                  onNavigateToFiles={() => setActiveTab("files")}
                 />
               </TabsContent>
 
@@ -971,16 +966,22 @@ export default function ProjectDetailPage() {
                 <RoomsTab project={project} />
               </TabsContent>
 
-              <TabsContent value="photos">
-                <PhotosTab project={project} />
-              </TabsContent>
-
-              <TabsContent value="documents">
-                <DocumentsTab project={project} />
-              </TabsContent>
-
-              <TabsContent value="walk">
-                <WalkTab project={project} />
+              <TabsContent value="files">
+                <FilesTab 
+                  projectId={projectId}
+                  onUseInCopilot={(fileUrl, fileName) => {
+                    setIsCopilotOpen(true)
+                    // Dispatch event to attach file to copilot
+                    setTimeout(() => {
+                      window.dispatchEvent(new CustomEvent('copilot-file-attach', {
+                        detail: { 
+                          message: `Analyze this file: ${fileName}`,
+                          fileUrl: fileUrl
+                        }
+                      }))
+                    }, 300)
+                  }}
+                />
               </TabsContent>
 
               <TabsContent value="proposals">
