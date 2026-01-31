@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Home Improvement Contract</title>
+  <style>
+    @page { 
+      margin: 50px 60px; 
+    }
+    body { 
+      font-family: "Times New Roman", serif; 
+      font-size: 11pt; 
+      line-height: 1.6; 
+      color: #000;
+    }
+    .header { 
+      text-align: center; 
+      margin-bottom: 30px; 
+    }
+    .company-name {
+      font-size: 18pt;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+    .company-info {
+      font-size: 11pt;
+      margin: 4px 0;
+    }
+    .title {
+      font-size: 16pt;
+      font-weight: bold;
+      margin-top: 25px;
+      margin-bottom: 20px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .intro-text {
+      margin-bottom: 25px;
+      text-align: justify;
+    }
+    .section { 
+      margin-bottom: 25px; 
+    }
+    .section-title { 
+      font-weight: bold; 
+      font-size: 12pt; 
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      border-bottom: 1px solid #000;
+      padding-bottom: 4px;
+    }
+    .scope-content {
+      margin-left: 20px;
+      margin-bottom: 15px;
+      text-align: justify;
+    }
+    .scope-list {
+      margin-left: 30px;
+      margin-top: 10px;
+      margin-bottom: 15px;
+    }
+    .scope-list li {
+      margin-bottom: 8px;
+      text-align: justify;
+    }
+    .materials-clause {
+      margin-top: 15px;
+      margin-left: 20px;
+      font-style: italic;
+      text-align: justify;
+    }
+    .financial-block {
+      border: 2px solid #000;
+      padding: 15px;
+      margin: 20px 0;
+    }
+    .financial-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #ccc;
+    }
+    .financial-row:last-child {
+      border-bottom: none;
+    }
+    .financial-label {
+      font-weight: bold;
+    }
+    .financial-value {
+      font-weight: bold;
+      text-align: right;
+    }
+    table { 
+      width: 100%; 
+      border-collapse: collapse; 
+      margin: 15px 0; 
+    }
+    th, td { 
+      padding: 10px; 
+      text-align: left; 
+      border: 1px solid #000; 
+    }
+    th { 
+      font-weight: bold; 
+      background-color: #f0f0f0;
+      text-align: center;
+    }
+    td {
+      text-align: left;
+    }
+    td.amount {
+      text-align: right;
+    }
+    .legal-section {
+      margin-top: 30px;
+      margin-bottom: 20px;
+    }
+    .legal-clause {
+      margin-bottom: 15px;
+      text-align: justify;
+    }
+    .legal-clause-title {
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+    .right-to-cancel-box {
+      border: 2px solid #000;
+      padding: 15px;
+      margin: 20px 0;
+      background-color: #fffacd;
+    }
+    .right-to-cancel-title {
+      font-weight: bold;
+      font-size: 12pt;
+      text-align: center;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+    }
+    .signature-block {
+      margin-top: 50px;
+      page-break-inside: avoid;
+    }
+    .signature-section {
+      margin-bottom: 30px;
+    }
+    .signature-line {
+      border-bottom: 2px solid #000;
+      width: 350px;
+      margin: 40px 0 8px 0;
+      display: inline-block;
+    }
+    .signature-label {
+      font-size: 10pt;
+      margin-top: 5px;
+    }
+    .date-line {
+      border-bottom: 1px solid #000;
+      width: 200px;
+      margin: 20px 0 8px 0;
+      display: inline-block;
+    }
+    .no-break {
+      page-break-inside: avoid;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header Section -->
+  <div class="header">
+    <div class="company-name">{{company_name}}</div>
+    <div class="company-info">{{company_phone}}</div>
+    {{#if contractor_license}}
+    <div class="company-info">License #: {{contractor_license}}</div>
+    {{/if}}
+    <div class="title">AGREEMENT</div>
+    <div class="title" style="font-size: 14pt; margin-top: 10px;">HOME IMPROVEMENT CONTRACT</div>
+  </div>
+
+  <!-- Intro Text -->
+  <div class="intro-text">
+    <p>This Building Improvement contract is between <strong>{{client_name}}</strong> (hereinafter referred to as "Owner" or "Client") and <strong>{{company_name}}</strong> (hereinafter referred to as "Contractor"), for the improvement of property located at <strong>{{project_address}}</strong>.</p>
+  </div>
+
+  <!-- Scope of Work Section -->
+  <div class="section no-break">
+    <div class="section-title">Scope of Work</div>
+    <div class="scope-content">
+      <p><strong>Description of the Project:</strong></p>
+      <p>The Contractor agrees to perform the following work in accordance with the plans, specifications, and terms of this contract:</p>
+      
+      {{#if scope_items}}
+      <ul class="scope-list">
+        {{#each scope_items}}
+        <li>{{this.description}}</li>
+        {{/each}}
+      </ul>
+      {{/if}}
+      
+      {{#if scope_text}}
+      <div class="scope-content">
+        {{scope_text}}
+      </div>
+      {{/if}}
+      
+      <div class="materials-clause">
+        <p><strong>Materials:</strong> Contractor supplying all materials to complete project including but not limited to: lumber, hardware, fixtures, finishes, and all other materials necessary for the completion of the work described above, unless otherwise specified in writing.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Financial Summary Block -->
+  <div class="section no-break">
+    <div class="section-title">Financial Terms</div>
+    <div class="financial-block">
+      <div class="financial-row">
+        <span class="financial-label">Contract Price:</span>
+        <span class="financial-value">${{formatCurrency total_price}}</span>
+      </div>
+      <div class="financial-row">
+        <span class="financial-label">Down Payment:</span>
+        <span class="financial-value">${{formatCurrency down_payment}}</span>
+      </div>
+      <div class="financial-row">
+        <span class="financial-label">Finance Charge:</span>
+        <span class="financial-value">$0.00</span>
+      </div>
+    </div>
+
+    {{#if payment_schedule}}
+    <div style="margin-top: 20px;">
+      <div class="section-title" style="font-size: 11pt; border: none; padding: 0; margin-bottom: 10px;">Payment Schedule</div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 70%;">Milestone</th>
+            <th style="width: 30%; text-align: right;">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each payment_schedule}}
+          <tr>
+            <td>{{this.milestone}}</td>
+            <td class="amount">${{formatCurrency this.amount}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </div>
+    {{/if}}
+  </div>
+
+  <!-- Legal Terms Section -->
+  <div class="section">
+    <div class="section-title">Terms and Conditions</div>
+    
+    <!-- Licensing -->
+    <div class="legal-clause">
+      <div class="legal-clause-title">Licensing:</div>
+      <p>The Contractor represents and warrants that they hold a valid contractor's license in good standing in the state where the work is to be performed. License number: {{contractor_license}}.</p>
+    </div>
+
+    <!-- Warranty -->
+    <div class="legal-clause">
+      <div class="legal-clause-title">Warranty:</div>
+      <p>{{#if legal_text.warranty}}{{legal_text.warranty}}{{else}}All work performed under this contract is warranted against defects in materials and workmanship for a period of one (1) year from the date of substantial completion. This warranty covers repair or replacement of defective materials or workmanship at no additional cost to the Owner.{{/if}}</p>
+    </div>
+
+    <!-- Termination -->
+    <div class="legal-clause">
+      <div class="legal-clause-title">Termination:</div>
+      <p>{{#if legal_text.termination}}{{legal_text.termination}}{{else}}Either party may terminate this contract by providing thirty (30) days written notice to the other party. Upon termination, the Contractor shall be paid for all work completed and materials delivered to the job site as of the termination date.{{/if}}</p>
+    </div>
+
+    <!-- Right to Cancel - Mandatory Notice Box -->
+    <div class="right-to-cancel-box no-break">
+      <div class="right-to-cancel-title">Three-Day Right to Cancel</div>
+      <p style="text-align: justify; margin-bottom: 10px;">
+        <strong>You, the Buyer, may cancel this transaction at any time prior to midnight of the third business day after the date of this contract.</strong>
+      </p>
+      <p style="text-align: justify; margin-bottom: 10px;">
+        {{#if legal_text.right_to_cancel}}{{legal_text.right_to_cancel}}{{else}}You, the Buyer, may cancel this transaction at any time prior to midnight of the third business day after the date of this contract. See the attached notice of cancellation form for an explanation of this right.{{/if}}
+      </p>
+      <p style="text-align: justify; margin-top: 15px;">
+        <strong>To cancel this transaction, mail or deliver a signed and dated copy of this cancellation notice or any other written notice, or send a telegram, to:</strong>
+      </p>
+      <p style="margin-left: 20px; margin-top: 10px;">
+        {{company_name}}<br>
+        {{#if contractor_address}}{{contractor_address}}<br>{{/if}}
+        {{company_phone}}
+      </p>
+      <p style="text-align: justify; margin-top: 15px;">
+        <strong>NOT LATER THAN MIDNIGHT OF THE THIRD BUSINESS DAY AFTER THE DATE OF THIS CONTRACT.</strong>
+      </p>
+    </div>
+
+    <!-- Additional Terms -->
+    {{#if additional_terms}}
+    <div class="legal-clause">
+      <div class="legal-clause-title">Additional Terms:</div>
+      <p>{{additional_terms}}</p>
+    </div>
+    {{/if}}
+  </div>
+
+  <!-- Signature Block -->
+  <div class="signature-block no-break">
+    <div class="signature-section">
+      <p><strong>Contractor:</strong></p>
+      <div class="signature-line"></div>
+      <div class="signature-label">{{company_name}}</div>
+      <div style="margin-top: 15px;">
+        <div class="date-line"></div>
+        <div class="signature-label">Date</div>
+      </div>
+    </div>
+
+    <div class="signature-section" style="margin-top: 40px;">
+      <p><strong>Owner/Client:</strong></p>
+      <div class="signature-line"></div>
+      <div class="signature-label">{{client_name}}</div>
+      <div style="margin-top: 15px;">
+        <div class="date-line"></div>
+        <div class="signature-label">Date</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Project Dates (if provided) -->
+  {{#if start_date}}
+  <div class="section" style="margin-top: 30px; font-size: 10pt;">
+    <p><strong>Project Start Date:</strong> {{start_date}}</p>
+    {{#if completion_date}}
+    <p><strong>Expected Completion Date:</strong> {{completion_date}}</p>
+    {{/if}}
+  </div>
+  {{/if}}
+</body>
+</html>

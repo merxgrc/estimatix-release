@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Construction Proposal</title>
+  <style>
+    /* Page + base styles */
+    @page {
+      margin: 60px 50px 80px 50px;
+    }
+
+    body {
+      font-family: "Times New Roman", serif;
+      font-size: 11pt;
+      color: #000;
+      line-height: 1.6;
+    }
+
+    /* Professional Centered Header */
+    .header {
+      text-align: center;
+      margin-bottom: 35px;
+    }
+
+    .logo-container {
+      margin-bottom: 15px;
+    }
+
+    .company-logo {
+      max-width: 180px;
+      max-height: 90px;
+      object-fit: contain;
+      margin: 0 auto;
+      display: block;
+    }
+
+    .logo-placeholder {
+      width: 150px;
+      height: 70px;
+      margin: 0 auto 15px;
+      background-color: #e0e0e0;
+      border: 2px solid #ccc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9pt;
+      color: #666;
+      text-align: center;
+      padding: 8px;
+    }
+
+    .company-name-large {
+      font-size: 36pt;
+      font-weight: bold;
+      letter-spacing: 2px;
+      margin-bottom: 5px;
+    }
+
+    .company-tagline {
+      font-size: 9pt;
+      font-style: italic;
+      color: #555;
+      margin-top: 3px;
+    }
+
+    .project-title {
+      font-size: 24pt;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin: 30px 0 10px;
+      letter-spacing: 1px;
+    }
+
+    .header-subtitle {
+      font-size: 13pt;
+      font-weight: bold;
+      margin-bottom: 6px;
+    }
+
+    .header-info {
+      font-size: 11pt;
+      margin-bottom: 3px;
+    }
+
+    /* Basis/Intro Text */
+    .basis-text {
+      text-align: left;
+      margin: 25px 0 35px;
+      line-height: 1.7;
+    }
+
+    /* The Big Number Section */
+    .total-section {
+      text-align: center;
+      margin: 40px 0 50px;
+    }
+
+    .total-label {
+      font-size: 12pt;
+      margin-bottom: 12px;
+      line-height: 1.6;
+    }
+
+    .total-amount {
+      font-size: 36pt;
+      font-weight: bold;
+      color: #000;
+      letter-spacing: -1px;
+    }
+
+    /* Allowances Section */
+    .allowances-section {
+      margin: 30px 0;
+      page-break-inside: avoid;
+    }
+
+    .allowances-header {
+      font-weight: bold;
+      font-size: 11pt;
+      margin-bottom: 15px;
+    }
+
+    .allowances-list {
+      margin: 15px 0;
+    }
+
+    .allowance-item {
+      display: flex;
+      align-items: baseline;
+      margin-bottom: 8px;
+      line-height: 1.8;
+      font-size: 11pt;
+    }
+
+    .allowance-description {
+      flex: 0 0 auto;
+    }
+
+    .allowance-dots {
+      flex: 1 1 auto;
+      border-bottom: 2px dotted #999;
+      margin: 0 10px;
+      min-width: 20px;
+      height: 1.2em;
+    }
+
+    .allowance-price {
+      flex: 0 0 auto;
+      font-weight: normal;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .allowances-total {
+      margin-top: 15px;
+      padding-top: 10px;
+      border-top: 2px solid #000;
+      display: flex;
+      align-items: baseline;
+      font-weight: bold;
+      font-size: 12pt;
+    }
+
+    .allowances-total-label {
+      flex: 0 0 auto;
+    }
+
+    .allowances-total-dots {
+      flex: 1 1 auto;
+      border-bottom: 2px dotted #999;
+      margin: 0 10px;
+      min-width: 20px;
+      height: 1.2em;
+    }
+
+    .allowances-total-price {
+      flex: 0 0 auto;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    /* Unified Scope List */
+    .scope-list {
+      margin: 30px 0;
+    }
+
+    .scope-item {
+      display: flex;
+      align-items: baseline;
+      margin-bottom: 6px;
+      line-height: 1.8;
+      page-break-inside: avoid;
+      font-size: 11pt;
+    }
+
+    .scope-description {
+      flex: 0 0 auto;
+    }
+
+    .scope-dots {
+      flex: 1 1 auto;
+      border-bottom: 2px dotted #999;
+      margin: 0 10px;
+      min-width: 20px;
+      height: 1.2em;
+    }
+
+    .scope-price {
+      flex: 0 0 auto;
+      font-weight: normal;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    /* Section Headers for Inclusions/Exclusions/Discussions */
+    .section-header {
+      font-weight: bold;
+      font-size: 11pt;
+      margin-top: 25px;
+      margin-bottom: 10px;
+    }
+
+    .section-list {
+      list-style: none;
+      padding-left: 0;
+      margin: 0 0 20px 0;
+    }
+
+    .section-list li {
+      padding: 4px 0;
+      padding-left: 20px;
+      position: relative;
+      font-size: 11pt;
+    }
+
+    .section-list li:before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      font-weight: bold;
+    }
+
+    /* Professional Footer/Closing */
+    .closing-section {
+      margin-top: 50px;
+      page-break-inside: avoid;
+    }
+
+    .closing-text {
+      margin-bottom: 30px;
+      line-height: 1.8;
+    }
+
+    .signature-block {
+      margin-top: 40px;
+    }
+
+    .signature-label {
+      font-weight: bold;
+      margin-bottom: 5px;
+      font-size: 11pt;
+    }
+
+    .signature-name {
+      margin-top: 40px;
+      font-size: 11pt;
+    }
+
+    .signature-date {
+      text-align: right;
+      margin-top: 40px;
+      font-size: 11pt;
+    }
+
+    /* Footer Bar */
+    .footer-bar {
+      position: fixed;
+      bottom: 15px;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 9pt;
+      color: #333;
+      padding-top: 8px;
+    }
+
+    .footer-content {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 15px;
+      flex-wrap: wrap;
+    }
+
+    .footer-separator {
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Professional Centered Header -->
+  <div class="header">
+    <div class="logo-container">
+      {{#if company_logo_url}}
+      <img src="{{company_logo_url}}" alt="Company Logo" class="company-logo" />
+      {{else}}
+      <div class="logo-placeholder">
+        COMPANY LOGO HERE
+      </div>
+      {{/if}}
+    </div>
+
+    {{#if contractor_company}}
+    <div class="company-name-large">{{contractor_company}}</div>
+    {{else}}
+    <div class="company-name-large">COMPANY NAME</div>
+    {{/if}}
+
+    {{#if contractor_company}}
+    <div class="company-tagline">Trusted Since {{year}}</div>
+    {{/if}}
+
+    <div class="project-title">{{project_name}}</div>
+
+    <div class="header-subtitle">Construction Proposal</div>
+    <div class="header-info">{{project_address}}</div>
+    <div class="header-info">{{proposal_date}}</div>
+  </div>
+
+  <!-- Section A: Basis Text -->
+  {{#if basis_of_estimate}}
+  <div class="basis-text">
+    {{basis_of_estimate}}
+  </div>
+  {{else}}
+  <div class="basis-text">
+    This proposal is based on plans dated {{proposal_date}} and is subject to the conditions and specifications outlined below.
+  </div>
+  {{/if}}
+
+  <!-- Section A: The Big Number -->
+  <div class="total-section">
+    <div class="total-label">
+      The total estimated budget for the construction remodel of the home is:
+    </div>
+    <div class="total-amount">{{formatCurrency total_price}}</div>
+  </div>
+
+  <!-- Section B: Allowances -->
+  {{#if allowance_items}}
+  {{#if allowance_items.length}}
+  <div class="allowances-section">
+    <div class="allowances-header">This estimate includes the following Allowances:</div>
+    <div class="allowances-list">
+      {{#each allowance_items}}
+      <div class="allowance-item">
+        <span class="allowance-description">{{this.description}}</span>
+        <span class="allowance-dots"></span>
+        <span class="allowance-price">{{formatCurrency this.client_price}}</span>
+      </div>
+      {{/each}}
+    </div>
+    {{#if total_allowances}}
+    <div class="allowances-total">
+      <span class="allowances-total-label">Total Allowances:</span>
+      <span class="allowances-total-dots"></span>
+      <span class="allowances-total-price">{{formatCurrency total_allowances}}</span>
+    </div>
+    {{/if}}
+  </div>
+  {{/if}}
+  {{/if}}
+
+  <!-- Section C: Inclusions / Scope of Work -->
+  {{#if custom_inclusions}}
+  {{#if (gt custom_inclusions.length 0)}}
+  <!-- User provided custom inclusions - render as bullet list -->
+  <div class="section-header">This estimate includes:</div>
+  <ul class="section-list">
+    {{#each custom_inclusions}}
+    <li>{{this}}</li>
+    {{/each}}
+  </ul>
+  {{else}}
+  <!-- Custom inclusions array exists but is empty, show default itemized scope list -->
+  {{#if scope_items}}
+  {{#if scope_items.length}}
+  <div class="section-header">This estimate includes:</div>
+  <div class="scope-list">
+    {{#each scope_items}}
+    <div class="scope-item">
+      <span class="scope-description">{{this.description}}</span>
+      <span class="scope-dots"></span>
+      <span class="scope-price">{{formatCurrency this.client_price}}</span>
+    </div>
+    {{/each}}
+  </div>
+  {{/if}}
+  {{/if}}
+  {{/if}}
+  {{else}}
+  <!-- No custom inclusions provided, show default itemized scope list -->
+  {{#if scope_items}}
+  {{#if scope_items.length}}
+  <div class="section-header">This estimate includes:</div>
+  <div class="scope-list">
+    {{#each scope_items}}
+    <div class="scope-item">
+      <span class="scope-description">{{this.description}}</span>
+      <span class="scope-dots"></span>
+      <span class="scope-price">{{formatCurrency this.client_price}}</span>
+    </div>
+    {{/each}}
+  </div>
+  {{/if}}
+  {{/if}}
+  {{/if}}
+
+  <!-- Section D: Exclusions -->
+  {{#if exclusions}}
+  {{#if exclusions.length}}
+  <div class="section-header">This estimate excludes:</div>
+  <ul class="section-list">
+    {{#each exclusions}}
+    <li>{{this}}</li>
+    {{/each}}
+  </ul>
+  {{/if}}
+  {{/if}}
+
+  <!-- Section D: Discussions -->
+  {{#if discussions}}
+  <div class="section-header">Discussions:</div>
+  {{#if (isArray discussions)}}
+  <ul class="section-list">
+    {{#each discussions}}
+    <li>{{this}}</li>
+    {{/each}}
+  </ul>
+  {{else}}
+  <!-- If discussions is a string, render as bullet point -->
+  <ul class="section-list">
+    <li>{{discussions}}</li>
+  </ul>
+  {{/if}}
+  {{/if}}
+
+  <!-- Section E: Professional Footer/Closing -->
+  <div class="closing-section">
+    <div class="closing-text">
+      Thank you for the opportunity to provide a proposal for your project. We look forward to working with you in your beautiful home.
+    </div>
+
+    <div class="signature-block">
+      <div class="signature-label">Sincerely,</div>
+      {{#if contractor_name}}
+      <div class="signature-name">{{contractor_name}}</div>
+      {{/if}}
+      <div class="signature-date">{{proposal_date}}</div>
+    </div>
+  </div>
+
+  <!-- Footer Bar -->
+  <div class="footer-bar">
+    <div class="footer-content">
+      {{#if contractor_company}}
+      <span>{{contractor_company}}</span>
+      <span class="footer-separator">♦</span>
+      {{/if}}
+      {{#if contractor_address}}
+      <span>{{contractor_address}}</span>
+      <span class="footer-separator">♦</span>
+      {{/if}}
+      {{#if contractor_phone}}
+      <span>Ph: {{contractor_phone}}</span>
+      {{/if}}
+      {{#if contractor_website}}
+      <span class="footer-separator">♦</span>
+      <span>{{contractor_website}}</span>
+      {{/if}}
+      {{#if contractor_license}}
+      <span class="footer-separator">♦</span>
+      <span>Lic # {{contractor_license}}</span>
+      {{/if}}
+    </div>
+  </div>
+
+</body>
+</html>

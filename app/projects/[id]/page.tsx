@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useRouter, useParams } from 'next/navigation'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { Sidebar } from "@/components/sidebar"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -13,22 +13,55 @@ import { EditableProjectTitle } from "@/components/editable-project-title"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { SummaryTab } from "./_components/SummaryTab"
 import { EstimateTab } from "./_components/EstimateTab"
+import { PricingTab } from "./_components/PricingTab"
 import { RoomsTab } from "./_components/RoomsTab"
-import { PhotosTab } from "./_components/PhotosTab"
-import { DocumentsTab } from "./_components/DocumentsTab"
-import { WalkTab } from "./_components/WalkTab"
+import { FilesTab } from "@/components/files/FilesTab"
+import { SpecSheetsTab } from "./_components/SpecSheetsTab"
+import { SelectionsTab } from "./_components/SelectionsTab"
 import { ProposalsTab } from "./_components/ProposalsTab"
-import type { Project, Estimate } from "@/types/db"
-import { ArrowLeft, Trash2 } from "lucide-react"
+import { ContractsTab } from "./_components/ContractsTab"
+import { ManageTab } from "./_components/ManageTab"
+import type { Project, Estimate, Upload, Profile } from "@/types/db"
+import { ArrowLeft, Trash2, MessageSquare, Download, FileDown, FileText } from "lucide-react"
+import { toast } from 'sonner'
+import { supabase } from "@/lib/supabase/client"
+import { useSidebar } from "@/lib/sidebar-context"
+import { CopilotChat } from "@/components/copilot/CopilotChat"
+import { Drawer, DrawerContent } from "@/components/ui/sheet"
+import { CloseJobModal } from "@/components/projects/CloseJobModal"
 
 export default function ProjectDetailPage() {
   const router = useRouter()
   const params = useParams()
+  const searchParams = useSearchParams()
   const { user } = useAuth()
+  const { sidebarWidth, isCollapsed } = useSidebar()
   const projectId = params.id as string
+
+  // Validate that projectId is a valid UUID (not "new" or other invalid values)
+  useEffect(() => {
+    // Check if projectId is "new" - redirect to the new project page
+    if (projectId === 'new') {
+      router.push('/projects/new')
+      return
+    }
+
+    // Basic UUID validation (UUIDs are 36 characters with dashes)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (projectId && !uuidRegex.test(projectId)) {
+      console.error('Invalid project ID format:', projectId)
+      setError('Invalid project ID')
+      setIsLoading(false)
+      router.push('/projects')
+      return
+    }
+  }, [projectId, router])
 
   const [project, setProject] = useState<Project | null>(null)
   const [estimates, setEstimates] = useState<Estimate[]>([])
+  const [photos, setPhotos] = useState<{ url: string; id: string }[]>([])
+  const [documents, setDocuments] = useState<{ url: string; name: string; id: string }[]>([])
+  const [estimatorProfile, setEstimatorProfile] = useState<Profile | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeEstimateId, setActiveEstimateId] = useState<string | null>(null)
@@ -36,6 +69,24 @@ export default function ProjectDetailPage() {
   const [deletingEstimateId, setDeletingEstimateId] = useState<string | null>(null)
   const [isParsing, setIsParsing] = useState(false)
   const [activeTab, setActiveTab] = useState("summary")
+  const [isCopilotOpen, setIsCopilotOpen] = useState(false)
+  const [isExportingPdf, setIsExportingPdf] = useState(false)
+  const [isCloseJobModalOpen, setIsCloseJobModalOpen] = useState(false)
+  const [recentActions, setRecentActions] = useState<any[]>([])
+  const recentActionsRef = useRef<any[]>([])
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    recentActionsRef.current = recentActions
+  }, [recentActions])
+
+  // Handle URL query params for tab and roomId
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    if (tab) {
+      setActiveTab(tab)
+    }
+  }, [searchParams])
 
   useEffect(() => {
     const fetchProjectData = async () => {
@@ -48,11 +99,12 @@ export default function ProjectDetailPage() {
         setIsLoading(true)
         setError(null)
 
-        // Fetch project and estimates in parallel
+        // Fetch project, estimates, and uploads in parallel
         // Use Promise.allSettled to handle individual failures gracefully
-        const [projectResult, estimatesResult] = await Promise.allSettled([
+        const [projectResult, estimatesResult, uploadsResult] = await Promise.allSettled([
           db.getProject(projectId),
-          db.getEstimates(projectId)
+          db.getEstimates(projectId),
+          db.getUploads(projectId)
         ])
 
         // Handle project fetch result
@@ -79,9 +131,58 @@ export default function ProjectDetailPage() {
         }
 
         const estimatesData = estimatesResult.value
+        
+        // Handle uploads fetch result
+        let uploadsData: Upload[] = []
+        if (uploadsResult.status === 'fulfilled') {
+          uploadsData = uploadsResult.value
+        } else {
+          console.warn('Error fetching uploads:', uploadsResult.reason)
+        }
 
         setProject(projectData)
         setEstimates(estimatesData)
+        
+        // Separate photos and documents from uploads
+        const photosData = uploadsData
+          .filter(u => u.kind === 'photo')
+          .map(u => ({ url: u.file_url, id: u.id }))
+        
+        const documentsData = uploadsData
+          .filter(u => u.kind === 'blueprint')
+          .map(u => {
+            // Get original filename from database if available, otherwise extract from URL
+            const originalFilename = (u as any).original_filename
+            let filename = originalFilename
+            
+            if (!filename) {
+              // Fallback: try to extract from URL
+              const urlParts = u.file_url.split('/')
+              filename = urlParts[urlParts.length - 1] || 'Document'
+            }
+            
+            return { url: u.file_url, name: filename, id: u.id }
+          })
+        
+        setPhotos(photosData)
+        setDocuments(documentsData)
+        
+        // Fetch estimator profile using client-side Supabase
+        if (projectData.user_id) {
+          try {
+            const { data: profile, error } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', projectData.user_id)
+              .single()
+            
+            if (!error && profile) {
+              setEstimatorProfile(profile)
+            }
+          } catch (err) {
+            console.warn('Could not load estimator profile:', err)
+          }
+        }
         
         // Set the most recent estimate as active if any exist
         if (estimatesData.length > 0) {
@@ -114,6 +215,32 @@ export default function ProjectDetailPage() {
     fetchProjectData()
   }, [projectId, user])
 
+  // Create a stable function to fetch estimates only (for event listener)
+  const fetchEstimates = useCallback(async () => {
+    if (!projectId) return
+    
+    try {
+      console.log('[ProjectPage] Received estimate-updated event, refreshing estimates...')
+      const estimatesData = await db.getEstimates(projectId)
+      setEstimates(estimatesData)
+      console.log('[ProjectPage] Estimates refreshed:', estimatesData.length, 'estimates')
+    } catch (err) {
+      console.error('[ProjectPage] Error fetching estimates:', err)
+    }
+  }, [projectId])
+
+  // Listen for estimate-updated event from Copilot
+  useEffect(() => {
+    const handleEstimateUpdate = () => {
+      fetchEstimates()
+    }
+
+    window.addEventListener('estimate-updated', handleEstimateUpdate)
+    return () => {
+      window.removeEventListener('estimate-updated', handleEstimateUpdate)
+    }
+  }, [fetchEstimates])
+
   const handleEstimateSave = (estimateId: string, total: number) => {
     // Refresh estimates list
     db.getEstimates(projectId).then(setEstimates).catch(console.error)
@@ -142,7 +269,14 @@ export default function ProjectDetailPage() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || `Parse failed: ${response.status}`)
+        const errorMessage = errorData.error || `Parse failed: ${response.status}`
+        
+        // Provide user-friendly messages for common errors
+        if (response.status === 502 || response.status === 503 || response.status === 504) {
+          throw new Error(`Service temporarily unavailable. The AI parsing service is experiencing issues. Please try again in a few moments. (${errorMessage})`)
+        }
+        
+        throw new Error(errorMessage)
       }
 
       const result = await response.json()
@@ -222,28 +356,234 @@ export default function ProjectDetailPage() {
     }
   }
 
-  const handleUpdateProjectTitle = async (newTitle: string) => {
-    if (!project) return
-    
-    await db.updateProject(projectId, { title: newTitle })
-    // Update local state
-    setProject({ ...project, title: newTitle })
+  // Refresh function to reload project data after metadata updates
+  const refreshProjectData = async () => {
+    if (!projectId || !user) return
+
+    try {
+      const [projectData, estimatesData, uploadsData] = await Promise.all([
+        db.getProject(projectId),
+        db.getEstimates(projectId),
+        db.getUploads(projectId).catch(() => [])
+      ])
+
+      if (projectData) {
+        setProject(projectData)
+        setEstimates(estimatesData)
+        
+        // Update photos and documents
+        const photosData = uploadsData
+          .filter(u => u.kind === 'photo')
+          .map(u => ({ url: u.file_url, id: u.id }))
+        
+        const documentsData = uploadsData
+          .filter(u => u.kind === 'blueprint')
+          .map(u => {
+            const originalFilename = (u as any).original_filename
+            let filename = originalFilename
+            if (!filename) {
+              const urlParts = u.file_url.split('/')
+              filename = urlParts[urlParts.length - 1] || 'Document'
+            }
+            return { url: u.file_url, name: filename, id: u.id }
+          })
+        
+        setPhotos(photosData)
+        setDocuments(documentsData)
+
+        // Refresh profile if needed
+        if (projectData.user_id) {
+          try {
+            const { data: profile, error } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', projectData.user_id)
+              .single()
+            
+            if (!error && profile) {
+              setEstimatorProfile(profile)
+            }
+          } catch (err) {
+            console.warn('Could not refresh estimator profile:', err)
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error refreshing project data:', err)
+    }
   }
 
-  const handleUpdateProjectOwner = async (ownerName: string) => {
-    if (!project) return
-    
-    await db.updateProject(projectId, { owner_name: ownerName || null })
+  const handleUploadPhoto = async (file: File) => {
+    if (!user) throw new Error('User not authenticated')
+
+    // Dynamically import supabase to avoid webpack chunking issues
+    const { supabase } = await import('@/lib/supabase/client')
+
+    // Upload to Supabase Storage
+    // RLS policy requires user_id as first folder: user_id/photos/project_id/filename
+    const fileExt = file.name.split('.').pop()
+    const timestamp = Date.now()
+    const filePath = `${user.id}/photos/${projectId}/${timestamp}.${fileExt}`
+
+    const { error: uploadError } = await supabase.storage
+      .from('uploads')
+      .upload(filePath, file, {
+        contentType: file.type,
+        upsert: false
+      })
+
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError)
+      throw new Error(`Failed to upload photo: ${uploadError.message}`)
+    }
+
+    // Get public URL
+    const { data: { publicUrl } } = supabase.storage
+      .from('uploads')
+      .getPublicUrl(filePath)
+
+    // Create upload record in database with user_id
+    // Use supabase client directly to include user_id
+    // Note: user_id is required by RLS policy but not in TypeScript types yet
+    const { supabase: supabaseClient } = await import('@/lib/supabase/client')
+    const { data: newUpload, error: dbError } = await supabaseClient
+      .from('uploads')
+      .insert({
+        project_id: projectId,
+        file_url: publicUrl,
+        kind: 'photo',
+        user_id: user.id
+      } as any)
+      .select()
+      .single()
+
+    if (dbError) {
+      console.error('Database insert error:', dbError)
+      // Try to clean up the uploaded file
+      await supabase.storage.from('uploads').remove([filePath])
+      throw new Error(`Failed to save photo record: ${dbError.message}`)
+    }
+
     // Update local state
-    setProject({ ...project, owner_name: ownerName || null })
+    setPhotos([...photos, { url: publicUrl, id: newUpload.id }])
   }
 
-  const handleUpdateProjectAddress = async (address: string) => {
-    if (!project) return
+  const handleUploadDocument = async (file: File) => {
+    if (!user) throw new Error('User not authenticated')
+
+    // Dynamically import supabase to avoid webpack chunking issues
+    const { supabase } = await import('@/lib/supabase/client')
+
+    // Upload to Supabase Storage
+    // RLS policy requires user_id as first folder: user_id/documents/project_id/filename
+    const fileExt = file.name.split('.').pop()
+    const timestamp = Date.now()
+    const filePath = `${user.id}/documents/${projectId}/${timestamp}.${fileExt}`
+
+    const { error: uploadError } = await supabase.storage
+      .from('uploads')
+      .upload(filePath, file, {
+        contentType: file.type,
+        upsert: false
+      })
+
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError)
+      throw new Error(`Failed to upload document: ${uploadError.message}`)
+    }
+
+    // Get public URL
+    const { data: { publicUrl } } = supabase.storage
+      .from('uploads')
+      .getPublicUrl(filePath)
+
+    // Create upload record in database with user_id and original filename
+    // Use supabase client directly to include user_id and filename
+    // Note: user_id and filename are not in TypeScript types yet
+    const { supabase: supabaseClient } = await import('@/lib/supabase/client')
+    const { data: newUpload, error: dbError } = await supabaseClient
+      .from('uploads')
+      .insert({
+        project_id: projectId,
+        file_url: publicUrl,
+        kind: 'blueprint',
+        user_id: user.id,
+        original_filename: file.name // Store original filename
+      } as any)
+      .select()
+      .single()
+
+    if (dbError) {
+      console.error('Database insert error:', dbError)
+      // Try to clean up the uploaded file
+      await supabase.storage.from('uploads').remove([filePath])
+      throw new Error(`Failed to save document record: ${dbError.message}`)
+    }
+
+    // Update local state with original filename
+    setDocuments([...documents, { url: publicUrl, name: file.name, id: newUpload.id }])
+  }
+
+  const handleDeletePhoto = async (id: string) => {
+    // Find the upload to get the file path
+    const uploads = await db.getUploads(projectId)
+    const upload = uploads.find(u => u.id === id && u.kind === 'photo')
     
-    await db.updateProject(projectId, { project_address: address || null })
+    if (!upload) throw new Error('Photo not found')
+
+    // Dynamically import supabase to avoid webpack chunking issues
+    const { supabase } = await import('@/lib/supabase/client')
+
+    // Extract file path from URL
+    const urlParts = upload.file_url.split('/')
+    const filePath = urlParts.slice(urlParts.indexOf('uploads') + 1).join('/')
+
+    // Delete from storage
+    const { error: storageError } = await supabase.storage
+      .from('uploads')
+      .remove([filePath])
+
+    if (storageError) {
+      console.error('Error deleting from storage:', storageError)
+      // Continue with database deletion even if storage deletion fails
+    }
+
+    // Delete from database
+    await db.deleteUpload(id)
+
     // Update local state
-    setProject({ ...project, project_address: address || null })
+    setPhotos(photos.filter(p => p.id !== id))
+  }
+
+  const handleDeleteDocument = async (id: string) => {
+    // Find the upload to get the file path
+    const uploads = await db.getUploads(projectId)
+    const upload = uploads.find(u => u.id === id && u.kind === 'blueprint')
+    
+    if (!upload) throw new Error('Document not found')
+
+    // Dynamically import supabase to avoid webpack chunking issues
+    const { supabase } = await import('@/lib/supabase/client')
+
+    // Extract file path from URL
+    const urlParts = upload.file_url.split('/')
+    const filePath = urlParts.slice(urlParts.indexOf('uploads') + 1).join('/')
+
+    // Delete from storage
+    const { error: storageError } = await supabase.storage
+      .from('uploads')
+      .remove([filePath])
+
+    if (storageError) {
+      console.error('Error deleting from storage:', storageError)
+      // Continue with database deletion even if storage deletion fails
+    }
+
+    // Delete from database
+    await db.deleteUpload(id)
+
+    // Update local state
+    setDocuments(documents.filter(d => d.id !== id))
   }
 
   if (isLoading) {
@@ -251,7 +591,10 @@ export default function ProjectDetailPage() {
       <AuthGuard>
         <div className="flex min-h-screen">
           <Sidebar />
-          <div className="flex-1 md:ml-64 flex items-center justify-center">
+          <div 
+            className="flex-1 flex items-center justify-center transition-all duration-200"
+            style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
+          >
             <div className="text-center">
               <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
               <p className="text-muted-foreground">Loading project...</p>
@@ -267,7 +610,10 @@ export default function ProjectDetailPage() {
       <AuthGuard>
         <div className="flex min-h-screen">
           <Sidebar />
-          <div className="flex-1 md:ml-64 flex items-center justify-center p-6">
+          <div 
+            className="flex-1 flex items-center justify-center p-6 transition-all duration-200"
+            style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
+          >
             <Card className="max-w-xl w-full border-destructive">
               <CardHeader>
                 <CardTitle className="text-destructive">Error Loading Project</CardTitle>
@@ -291,27 +637,296 @@ export default function ProjectDetailPage() {
 
   const activeEstimate = activeEstimateId ? estimates.find(e => e.id === activeEstimateId) ?? null : null
 
+  const handleSendMessage = async (content: string, fileUrls?: string[]) => {
+    try {
+      // Safely get recentActions - use ref to avoid closure issues
+      const actionsToSend = recentActionsRef.current || []
+      
+      // Get current line items from active estimate for context
+      let currentLineItems: any[] = []
+      if (activeEstimate) {
+        // Load line items for the active estimate directly from Supabase
+        const { data: lineItems, error } = await supabase
+          .from('estimate_line_items')
+          .select('id, description, category, cost_code, room_name, quantity, unit')
+          .eq('estimate_id', activeEstimate.id)
+        
+        if (!error && lineItems) {
+          currentLineItems = lineItems.map((item: any) => ({
+            id: item.id,
+            description: item.description,
+            category: item.category,
+            cost_code: item.cost_code,
+            room_name: item.room_name,
+            quantity: item.quantity,
+            unit: item.unit
+          }))
+        }
+      }
+
+      // Build messages array
+      const messages = [
+        {
+          role: 'user' as const,
+          content
+        }
+      ]
+
+      // Create FormData if files are present, otherwise use JSON
+      let body: FormData | string
+      let headers: HeadersInit
+
+      if (fileUrls && fileUrls.length > 0) {
+        const formData = new FormData()
+        formData.append('messages', JSON.stringify(messages))
+        formData.append('projectId', projectId)
+        formData.append('currentLineItems', JSON.stringify(currentLineItems))
+        formData.append('recentActions', JSON.stringify(actionsToSend))
+        formData.append('fileUrls', JSON.stringify(fileUrls))
+        body = formData
+        headers = {}
+      } else {
+        body = JSON.stringify({
+          messages,
+          projectId,
+          currentLineItems,
+          recentActions: actionsToSend, // Pass recent actions for context
+          fileUrls: []
+        })
+        headers = {
+          'Content-Type': 'application/json'
+        }
+      }
+
+      const response = await fetch('/api/ai/copilot', {
+        method: 'POST',
+        headers,
+        body: body as BodyInit
+      })
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to send message'
+        let errorCode: string | undefined
+        let errorDetails: any
+        
+        try {
+          const error = await response.json()
+          errorMessage = error.error || errorMessage
+          errorCode = error.code
+          errorDetails = error.details
+          
+          // Handle specific error codes with user-friendly messages
+          if (errorCode === 'SCANNED_PDF') {
+            errorMessage = 'This PDF appears to be a scanned image. Please paste the text manually or use an OCR tool.'
+          } else if (errorCode === 'DOWNLOAD_ERROR') {
+            errorMessage = `Failed to download file: ${errorMessage}`
+          } else if (errorCode === 'PARSE_ERROR') {
+            errorMessage = 'We could not parse this PDF. It may be corrupted or image-only. Try re-uploading or pasting the text manually.'
+          } else if (errorCode === 'FILE_TOO_LARGE') {
+            errorMessage = `File is too large. Maximum size is 10MB.`
+          }
+        } catch (e) {
+          // If JSON parsing fails, use status text
+          console.error('Failed to parse error response:', e)
+          errorMessage = `Server error: ${response.status} ${response.statusText}`
+        }
+        
+        // Create error with code and details attached as plain properties
+        const errorObj: Error & { code?: string; details?: any } = new Error(errorMessage)
+
+        if (errorCode && typeof errorCode === 'string') {
+          (errorObj as any).code = errorCode
+        }
+
+        if (errorDetails && typeof errorDetails === 'object') {
+          // Best-effort serialization to avoid passing complex objects
+          let safeDetails: any = undefined
+          try {
+            safeDetails = JSON.parse(JSON.stringify(errorDetails))
+          } catch {
+            safeDetails = undefined
+          }
+          if (safeDetails !== undefined) {
+            (errorObj as any).details = safeDetails
+          }
+        }
+
+        throw errorObj
+      }
+
+      let result
+      try {
+        result = await response.json()
+      } catch (e) {
+        const text = await response.text()
+        console.error('Failed to parse response:', text)
+        throw new Error('Invalid response from server')
+      }
+      
+      // Reload estimates to show new line items
+      const updatedEstimates = await db.getEstimates(projectId)
+      setEstimates(updatedEstimates)
+      
+      console.log('Copilot response:', result)
+      
+      // Update recentActions with executed actions from this turn (for next turn context)
+      if (result.executedActions && Array.isArray(result.executedActions)) {
+        setRecentActions(prev => {
+          // Keep only the last 5 actions to avoid context bloat
+          const newActions = [...prev, ...result.executedActions]
+          return newActions.slice(-5)
+        })
+      }
+      
+      // Return the result so the component can immediately update UI
+      return result
+    } catch (error) {
+      console.error('Failed to send message:', error)
+      throw error
+    }
+  }
+
+  const handleVoiceRecord = () => {
+    // TODO: Implement voice recording
+    console.log('Voice record triggered')
+  }
+
+  const handleFileAttach = () => {
+    // File attachment is handled directly in CopilotChat component
+    console.log('File attachment handled in CopilotChat')
+  }
+
+  const handleExportPdf = async () => {
+    if (!activeEstimateId) {
+      toast.error('Please select an estimate to export')
+      return
+    }
+
+    setIsExportingPdf(true)
+    toast.loading('Generating PDF...', { id: 'export-pdf' })
+
+    try {
+      // Fetch PDF from API - it returns a URL to the PDF
+      const response = await fetch(`/api/spec-sheets/${activeEstimateId}/pdf`, {
+        method: 'GET'
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error(error.error || 'Failed to generate PDF')
+      }
+
+      const data = await response.json()
+      const pdfUrl = data.url
+
+      if (!pdfUrl) {
+        throw new Error('No PDF URL returned from server')
+      }
+
+      // Fetch the PDF blob from the URL
+      const pdfResponse = await fetch(pdfUrl)
+      if (!pdfResponse.ok) {
+        throw new Error('Failed to download PDF')
+      }
+
+      const blob = await pdfResponse.blob()
+
+      // Create a download link and trigger download
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      
+      // Sanitize project title for filename
+      const sanitizedTitle = (project?.title || 'estimate')
+        .replace(/[^a-z0-9]/gi, '-')
+        .toLowerCase()
+        .substring(0, 50)
+      const dateStr = new Date().toISOString().split('T')[0]
+      link.download = `SpecSheet-${sanitizedTitle}-${dateStr}.pdf`
+      
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      toast.success('PDF downloaded successfully!', { id: 'export-pdf' })
+    } catch (error) {
+      console.error('Failed to export PDF:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to export PDF'
+      toast.error(errorMessage, { id: 'export-pdf' })
+    } finally {
+      setIsExportingPdf(false)
+    }
+  }
+
   return (
     <AuthGuard>
       <div className="flex min-h-screen">
         <Sidebar />
 
-        <div className="flex-1 md:ml-64">
-          {/* Top Bar */}
-          <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div 
+          className="flex-1 transition-all duration-200 flex"
+          style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px`, marginRight: '0' }}
+        >
+          <div className="flex-1 flex flex-col min-w-0">
+            {/* Top Bar */}
+            <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="flex h-16 items-center justify-between px-4 md:px-6">
               <div className="flex items-center gap-4">
                 <Button variant="ghost" size="sm" onClick={() => router.push('/projects')}>
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back
                 </Button>
-                <EditableProjectTitle
-                  title={project.title}
-                  onSave={handleUpdateProjectTitle}
-                  variant="default"
-                />
+                <div className="flex flex-col">
+                  <EditableProjectTitle
+                    title={project.title}
+                    onSave={async (newTitle: string) => {
+                      await db.updateProject(projectId, { title: newTitle })
+                      setProject({ ...project, title: newTitle })
+                    }}
+                    variant="default"
+                  />
+                  {estimatorProfile && (
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {estimatorProfile.full_name && (
+                        <span>Estimator: {estimatorProfile.full_name}</span>
+                      )}
+                      {estimatorProfile.company_name && (
+                        <span className="ml-2">• {estimatorProfile.company_name}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleExportPdf}
+                  disabled={isExportingPdf || !activeEstimateId}
+                >
+                  {isExportingPdf ? (
+                    <>
+                      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="mr-2 h-4 w-4" />
+                      Export PDF
+                    </>
+                  )}
+                </Button>
+                {project?.status === 'active' && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => setIsCloseJobModalOpen(true)}
+                  >
+                    <FileText className="mr-2 h-4 w-4" />
+                    Mark Job Complete
+                  </Button>
+                )}
                 <Button
                   variant="destructive"
                   size="sm"
@@ -339,14 +954,17 @@ export default function ProjectDetailPage() {
           <main className="p-4 md:p-6">
             {/* Tab Navigation */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="w-full grid grid-cols-7 gap-1">
+              <TabsList className="w-full grid grid-cols-10 gap-1">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="estimate">Estimate</TabsTrigger>
+                <TabsTrigger value="pricing">Pricing</TabsTrigger>
+                <TabsTrigger value="selections">Selections</TabsTrigger>
                 <TabsTrigger value="rooms">Rooms</TabsTrigger>
-                <TabsTrigger value="photos">Photos</TabsTrigger>
-                <TabsTrigger value="documents">Documents</TabsTrigger>
-                <TabsTrigger value="walk">Walk-n-Talk</TabsTrigger>
+                <TabsTrigger value="files">Files</TabsTrigger>
                 <TabsTrigger value="proposals">Proposals</TabsTrigger>
+                <TabsTrigger value="contracts">Contracts</TabsTrigger>
+                <TabsTrigger value="manage">Manage</TabsTrigger>
+                <TabsTrigger value="spec-sheets">Spec Sheets</TabsTrigger>
               </TabsList>
 
               <TabsContent value="summary">
@@ -354,10 +972,15 @@ export default function ProjectDetailPage() {
                   project={project}
                   activeEstimate={activeEstimate}
                   estimates={estimates}
-                  onUpdateTitle={handleUpdateProjectTitle}
-                  onUpdateOwner={handleUpdateProjectOwner}
-                  onUpdateAddress={handleUpdateProjectAddress}
+                  photos={photos}
+                  documents={documents}
+                  onRefresh={refreshProjectData}
+                  onUploadPhoto={handleUploadPhoto}
+                  onUploadDocument={handleUploadDocument}
+                  onDeletePhoto={handleDeletePhoto}
+                  onDeleteDocument={handleDeleteDocument}
                   onNavigateToEstimate={() => setActiveTab("estimate")}
+                  onNavigateToFiles={() => setActiveTab("files")}
                 />
               </TabsContent>
 
@@ -373,6 +996,22 @@ export default function ProjectDetailPage() {
                   onSave={handleEstimateSave}
                   onRecordingComplete={handleRecordingComplete}
                   isParsing={isParsing}
+                  onEstimateStatusChange={fetchEstimates}
+                />
+              </TabsContent>
+
+              <TabsContent value="pricing">
+                <PricingTab
+                  project={project}
+                  estimates={estimates}
+                  activeEstimateId={activeEstimateId}
+                />
+              </TabsContent>
+
+              <TabsContent value="selections">
+                <SelectionsTab
+                  project={project}
+                  activeEstimateId={activeEstimateId}
                 />
               </TabsContent>
 
@@ -380,24 +1019,93 @@ export default function ProjectDetailPage() {
                 <RoomsTab project={project} />
               </TabsContent>
 
-              <TabsContent value="photos">
-                <PhotosTab project={project} />
-              </TabsContent>
-
-              <TabsContent value="documents">
-                <DocumentsTab project={project} />
-              </TabsContent>
-
-              <TabsContent value="walk">
-                <WalkTab project={project} />
+              <TabsContent value="files">
+                <FilesTab 
+                  projectId={projectId}
+                  onUseInCopilot={(fileUrl, fileName) => {
+                    setIsCopilotOpen(true)
+                    // Dispatch event to attach file to copilot
+                    setTimeout(() => {
+                      window.dispatchEvent(new CustomEvent('copilot-file-attach', {
+                        detail: { 
+                          message: `Analyze this file: ${fileName}`,
+                          fileUrl: fileUrl
+                        }
+                      }))
+                    }, 300)
+                  }}
+                />
               </TabsContent>
 
               <TabsContent value="proposals">
-                <ProposalsTab project={project} />
+                <ProposalsTab 
+                  project={project}
+                  activeEstimateId={activeEstimateId}
+                />
+              </TabsContent>
+
+              <TabsContent value="contracts">
+                <ContractsTab 
+                  project={project}
+                />
+              </TabsContent>
+
+              <TabsContent value="manage">
+                {project && <ManageTab project={project} />}
+              </TabsContent>
+
+              <TabsContent value="spec-sheets">
+                <SpecSheetsTab project={project} />
               </TabsContent>
             </Tabs>
           </main>
+          </div>
+
+          {/* Desktop Copilot Sidebar */}
+          <aside className="hidden lg:block w-[400px] flex-shrink-0 border-l border-border">
+            <CopilotChat
+              projectId={projectId}
+              onSendMessage={handleSendMessage}
+              onVoiceRecord={handleVoiceRecord}
+              onFileAttach={handleFileAttach}
+              className="h-screen sticky top-0"
+            />
+          </aside>
         </div>
+
+        {/* Mobile Copilot Drawer */}
+        <Drawer open={isCopilotOpen} onOpenChange={setIsCopilotOpen}>
+          <DrawerContent className="h-[calc(100vh-6rem)]">
+            <CopilotChat
+              projectId={projectId}
+              onSendMessage={handleSendMessage}
+              onVoiceRecord={handleVoiceRecord}
+              onFileAttach={handleFileAttach}
+              className="h-full border-0"
+            />
+          </DrawerContent>
+        </Drawer>
+
+        {/* Mobile Floating Action Button */}
+        <Button
+          onClick={() => setIsCopilotOpen(true)}
+          className="lg:hidden fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-lg z-30"
+          size="icon-lg"
+        >
+          <MessageSquare className="h-6 w-6" />
+          <span className="sr-only">Open Copilot</span>
+        </Button>
+
+        {/* Close Job Modal */}
+        <CloseJobModal
+          projectId={projectId}
+          open={isCloseJobModalOpen}
+          onOpenChange={setIsCloseJobModalOpen}
+          onSuccess={() => {
+            // Refresh project data after closing
+            refreshProjectData()
+          }}
+        />
       </div>
     </AuthGuard>
   )

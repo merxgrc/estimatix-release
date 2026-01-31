@@ -156,4 +156,19 @@
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
+
+  /* Ensure DayPicker calendar grid stays aligned */
+  /* DayPicker debug grid - global to catch all instances */
+  /* DayPicker base tweaks (keep minimal) */
+  .rdp-head_row,
+  .rdp-row {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+  .rdp-head_cell,
+  .rdp-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 }

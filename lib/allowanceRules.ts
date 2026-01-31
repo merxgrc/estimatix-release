@@ -1,7 +1,7 @@
 /**
  * Allowance Rules Configuration
  * 
- * Defines which cost codes should display "Allowance: $X" in generated proposals.
+ * Defines which cost codes should display "Allowance: $X" in generated spec sheets.
  * Based on the example spec sheet patterns where certain sections show allowances
  * while others (like Demo, Rough Carpentry, Drywall, Paint) do not.
  */
@@ -9,7 +9,7 @@
 export type CostCodeId = string; // e.g. "116", "201", "520", etc.
 
 /**
- * Set of cost codes that should display allowances in proposals.
+ * Set of cost codes that should display allowances in spec sheets.
  * Based on the example spec sheet patterns:
  * - 116 Building Permits/Fees
  * - 406 Prefab Fireplaces
@@ -49,7 +49,7 @@ export const ALLOWANCE_COST_CODES = new Set<CostCodeId>([
 ]);
 
 /**
- * Check if a cost code should display an allowance in proposals.
+ * Check if a cost code should display an allowance in spec sheets.
  * 
  * @param costCode - The cost code to check (e.g. "520", "201")
  * @returns true if this cost code should show an allowance, false otherwise
@@ -158,4 +158,5 @@ export function getCostCodeForItem(item: any): string | undefined {
   
   return undefined;
 }
+
 

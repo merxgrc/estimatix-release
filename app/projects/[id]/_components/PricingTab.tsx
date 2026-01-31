@@ -1,0 +1,805 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Input } from "@/components/ui/input"
+import type { Project, Estimate } from "@/types/db"
+import { supabase } from "@/lib/supabase/client"
+import { useAuth } from "@/lib/auth-context"
+import { Sparkles, AlertTriangle, CheckCircle2, Circle, Save, DollarSign } from "lucide-react"
+import { toast } from 'sonner'
+import { COST_CATEGORIES, getCostCode } from '@/lib/constants'
+
+interface LineItem {
+  id: string
+  estimate_id: string
+  project_id: string
+  room_name: string | null
+  description: string | null
+  cost_code: string | null
+  category: string | null
+  quantity: number | null
+  unit: string | null
+  labor_cost: number | null
+  material_cost: number | null
+  overhead_cost: number | null
+  direct_cost: number | null
+  unit_labor_cost: number | null
+  unit_material_cost: number | null
+  unit_total_cost: number | null
+  total_direct_cost: number | null
+  pricing_source: 'task_library' | 'user_library' | 'manual' | null
+  confidence: number | null
+  margin_percent: number | null
+  client_price: number | null
+  task_library_id?: string | null
+  matched_via?: 'semantic' | 'fuzzy' | 'cost_code_only' | null
+}
+
+interface Selection {
+  id: string
+  estimate_id: string
+  cost_code: string | null
+  room: string | null
+  category: string | null
+  title: string
+  description: string | null
+  allowance: number | null
+  subcontractor: string | null
+  source: 'manual' | 'voice' | 'ai_text' | 'file' | null
+}
+
+interface GroupedSelection {
+  costCode: string
+  scopeLabel: string
+  totalAllowance: number
+  selections: Selection[]
+}
+
+interface PricingTabProps {
+  project: Project
+  estimates: Estimate[]
+  activeEstimateId: string | null
+}
+
+// Group by scope (category) then room
+// IMPORTANT: Include ALL items, even if cost_code is null or pricing fields are null
+function groupByScopeThenRoom(items: LineItem[]) {
+  const byScope: Record<string, Record<string, LineItem[]>> = {}
+  
+  items.forEach(item => {
+    // Use "Unassigned" for items without cost_code or category
+    // This ensures all items are shown, including newly created ones
+    const scope = item.category || item.cost_code || "Unassigned"
+    const room = item.room_name || "General"
+    
+    if (!byScope[scope]) {
+      byScope[scope] = {}
+    }
+    if (!byScope[scope][room]) {
+      byScope[scope][room] = []
+    }
+    byScope[scope][room].push(item)
+  })
+  
+  return byScope
+}
+
+// Confidence badge component
+function ConfidenceBadge({ value }: { value: number | null }) {
+  if (value === null || value === undefined) {
+    return <span className="text-xs text-gray-400">—</span>
+  }
+  
+  const color = value > 90 ? "text-green-600" :
+                value > 60 ? "text-yellow-600" :
+                "text-red-600"
+  
+  return (
+    <span className={`text-xs font-medium ${color}`}>
+      {value}%
+    </span>
+  )
+}
+
+// Currency formatting utility
+const formatCurrency = (value: number | null | undefined) =>
+  new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  }).format(value || 0)
+
+export function PricingTab({ project, estimates, activeEstimateId }: PricingTabProps) {
+  const router = useRouter()
+  const { user } = useAuth()
+  const [lineItems, setLineItems] = useState<LineItem[]>([])
+  const [selections, setSelections] = useState<Selection[]>([])
+  const [isLoadingSelections, setIsLoadingSelections] = useState(false)
+  const [selectionsError, setSelectionsError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [isApplyingPricing, setIsApplyingPricing] = useState(false)
+  const [applySuccess, setApplySuccess] = useState(false)
+  const [updatingMargins, setUpdatingMargins] = useState<Set<string>>(new Set())
+  const [savingOverrides, setSavingOverrides] = useState<Set<string>>(new Set())
+
+  // Load line items when estimate changes
+  useEffect(() => {
+    const loadLineItems = async () => {
+      if (!activeEstimateId) {
+        setLineItems([])
+        setIsLoading(false)
+        return
+      }
+
+      try {
+        setIsLoading(true)
+        setError(null)
+
+        const { data, error: fetchError } = await supabase
+          .from('estimate_line_items')
+          .select('*')
+          .eq('estimate_id', activeEstimateId)
+          .order('created_at', { ascending: true })
+
+        if (fetchError) {
+          throw new Error(`Failed to load line items: ${fetchError.message}`)
+        }
+
+        setLineItems(data || [])
+      } catch (err) {
+        console.error('Error loading line items:', err)
+        setError(err instanceof Error ? err.message : 'Failed to load line items')
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    loadLineItems()
+  }, [activeEstimateId])
+
+  // Load selections when estimate changes
+  useEffect(() => {
+    const loadSelections = async () => {
+      if (!activeEstimateId) {
+        setSelections([])
+        setIsLoadingSelections(false)
+        return
+      }
+
+      try {
+        setIsLoadingSelections(true)
+        setSelectionsError(null)
+
+        const { data, error: fetchError } = await supabase
+          .from('selections')
+          .select('*')
+          .eq('estimate_id', activeEstimateId)
+          .order('created_at', { ascending: true })
+
+        if (fetchError) {
+          throw new Error(`Failed to load selections: ${fetchError.message}`)
+        }
+
+        setSelections(data || [])
+      } catch (err) {
+        console.error('Error loading selections:', err)
+        setSelectionsError(err instanceof Error ? err.message : 'Failed to load selections')
+      } finally {
+        setIsLoadingSelections(false)
+      }
+    }
+
+    loadSelections()
+  }, [activeEstimateId])
+
+  // Group selections by cost_code (scope)
+  const groupedSelections: GroupedSelection[] = (() => {
+    const byCostCode = new Map<string, Selection[]>()
+    
+    selections.forEach(sel => {
+      const costCode = sel.cost_code || '999'
+      if (!byCostCode.has(costCode)) {
+        byCostCode.set(costCode, [])
+      }
+      byCostCode.get(costCode)!.push(sel)
+    })
+
+    return Array.from(byCostCode.entries()).map(([costCode, selections]) => {
+      // Get scope label
+      const category = COST_CATEGORIES.find(c => c.code === costCode)
+      const scopeLabel = category 
+        ? `${costCode} – ${category.label.replace(/^[^–]+–\s*/, '')}`
+        : `${costCode} – ${selections[0]?.category || selections[0]?.title || 'Selection'}`
+
+      // Calculate total allowance
+      const totalAllowance = selections.reduce((sum, sel) => {
+        return sum + (sel.allowance || 0)
+      }, 0)
+
+      return {
+        costCode,
+        scopeLabel,
+        totalAllowance,
+        selections
+      }
+    }).sort((a, b) => a.costCode.localeCompare(b.costCode))
+  })()
+
+  // Handle Apply Pricing button
+  const handleApplyPricing = async () => {
+    if (!activeEstimateId) {
+      setError('No estimate selected')
+      return
+    }
+
+    try {
+      setIsApplyingPricing(true)
+      setError(null)
+      setApplySuccess(false)
+
+      const response = await fetch(`/api/pricing/apply-pricing/${activeEstimateId}`, {
+        method: 'POST'
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to apply pricing: ${response.status}`)
+      }
+
+      const result = await response.json()
+      setApplySuccess(true)
+      toast.success(`Pricing applied! ${result.updated || 0} items updated.`)
+
+      // Reload line items to show updated pricing
+      const { data, error: fetchError } = await supabase
+        .from('estimate_line_items')
+        .select('*')
+        .eq('estimate_id', activeEstimateId)
+        .order('created_at', { ascending: true })
+
+      if (!fetchError && data) {
+        setLineItems(data)
+      }
+
+      // Clear success message after 3 seconds
+      setTimeout(() => setApplySuccess(false), 3000)
+    } catch (err) {
+      console.error('Error applying pricing:', err)
+      const errorMessage = err instanceof Error ? err.message : 'Failed to apply pricing'
+      setError(errorMessage)
+      toast.error(errorMessage)
+    } finally {
+      setIsApplyingPricing(false)
+    }
+  }
+
+  // Update margin and recalculate pricing
+  const updateMargin = async (itemId: string, margin: number) => {
+    if (!itemId) return
+
+    setUpdatingMargins(prev => new Set(prev).add(itemId))
+
+    try {
+      const response = await fetch(`/api/pricing/recalculate/${itemId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ margin }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to update margin: ${response.status}`)
+      }
+
+      const result = await response.json()
+
+      // Update the item in state
+      setLineItems(prevItems =>
+        prevItems.map(item =>
+          item.id === itemId
+            ? {
+                ...item,
+                margin_percent: result.margin_percent,
+                overhead_cost: result.overhead_cost,
+                direct_cost: result.direct_cost,
+                client_price: result.client_price
+              }
+            : item
+        )
+      )
+
+      toast.success('Margin updated')
+    } catch (err) {
+      console.error('Error updating margin:', err)
+      toast.error(err instanceof Error ? err.message : 'Failed to update margin')
+    } finally {
+      setUpdatingMargins(prev => {
+        const next = new Set(prev)
+        next.delete(itemId)
+        return next
+      })
+    }
+  }
+
+  // Save as standard (user override)
+  const saveAsStandard = async (item: LineItem) => {
+    if (!user || !item.task_library_id) {
+      toast.error('Cannot save: Missing task library reference')
+      return
+    }
+
+    setSavingOverrides(prev => new Set(prev).add(item.id))
+
+    try {
+      // Calculate unit cost from direct cost
+      const quantity = item.quantity || 1
+      const unitCost = item.direct_cost ? item.direct_cost / quantity : 0
+
+      const response = await fetch('/api/pricing/user-library', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          task_library_id: item.task_library_id,
+          custom_unit_cost: unitCost,
+          notes: `User override for: ${item.description || 'Line item'}`
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to save override: ${response.status}`)
+      }
+
+      // Update the item to mark it as user_library
+      const { error: updateError } = await supabase
+        .from('estimate_line_items')
+        .update({ pricing_source: 'user_library' })
+        .eq('id', item.id)
+
+      if (updateError) {
+        console.error('Error updating pricing source:', updateError)
+      }
+
+      // Update local state
+      setLineItems(prevItems =>
+        prevItems.map(prevItem =>
+          prevItem.id === item.id
+            ? { ...prevItem, pricing_source: 'user_library' }
+            : prevItem
+        )
+      )
+
+      toast.success('Saved as standard pricing')
+    } catch (err) {
+      console.error('Error saving override:', err)
+      toast.error(err instanceof Error ? err.message : 'Failed to save override')
+    } finally {
+      setSavingOverrides(prev => {
+        const next = new Set(prev)
+        next.delete(item.id)
+        return next
+      })
+    }
+  }
+
+  // Group items by scope then room
+  const grouped = groupByScopeThenRoom(lineItems)
+
+  // Get scope label
+  const getScopeLabel = (scope: string) => {
+    if (scope === "Unassigned") {
+      return "Unassigned (No Cost Code)"
+    }
+    const category = COST_CATEGORIES.find(c => c.code === scope || c.label === scope)
+    return category?.label || scope
+  }
+
+  // Calculate totals
+  const totals = lineItems.reduce(
+    (acc, item) => {
+      acc.directCost += item.direct_cost || 0
+      acc.clientPrice += item.client_price || 0
+      return acc
+    },
+    { directCost: 0, clientPrice: 0 }
+  )
+  const totalMargin = totals.clientPrice - totals.directCost
+
+  const activeEstimate = activeEstimateId ? estimates.find(e => e.id === activeEstimateId) : null
+
+  if (!activeEstimate) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center text-muted-foreground">
+          <p>Please select an estimate from the Estimate tab to view pricing.</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Action Buttons */}
+      <div className="flex gap-4">
+        <Button
+          onClick={handleApplyPricing}
+          disabled={isApplyingPricing || !activeEstimateId}
+          className="bg-blue-600 hover:bg-blue-700"
+        >
+          {isApplyingPricing ? (
+            <>
+              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              Applying Pricing...
+            </>
+          ) : (
+            <>
+              <Sparkles className="mr-2 h-4 w-4" />
+              Apply Pricing
+            </>
+          )}
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => router.refresh()}
+        >
+          <DollarSign className="mr-2 h-4 w-4" />
+          Review Overrides
+        </Button>
+      </div>
+
+      {/* Success/Error Messages */}
+      {applySuccess && (
+        <Alert className="border-green-200 bg-green-50">
+          <CheckCircle2 className="h-4 w-4 text-green-600" />
+          <AlertDescription className="text-green-800">
+            Pricing applied successfully! {lineItems.length} line items updated.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {error && (
+        <Alert className="border-red-200 bg-red-50">
+          <AlertTriangle className="h-4 w-4 text-red-600" />
+          <AlertDescription className="text-red-800">{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Loading State */}
+      {isLoading && (
+        <Card>
+          <CardContent className="py-8 text-center">
+            <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+            <p className="text-muted-foreground">Loading pricing data...</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* No Line Items */}
+      {!isLoading && lineItems.length === 0 && (
+        <Card>
+          <CardContent className="py-8 text-center text-muted-foreground">
+            <p>No line items found. Create line items in the Estimate tab first.</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Grouped Line Items Display */}
+      {!isLoading && lineItems.length > 0 && (
+        <div className="space-y-8">
+          {Object.entries(grouped).map(([scope, rooms]) => {
+            const scopeLabel = getScopeLabel(scope)
+
+            return (
+              <Card key={scope}>
+                <CardHeader>
+                  <CardTitle className="text-xl">{scopeLabel}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-6">
+                    {Object.entries(rooms).map(([room, items]) => (
+                      <div key={room} className="space-y-3">
+                        {/* Room Header */}
+                        {room !== 'General' && (
+                          <h4 className="font-semibold text-lg text-primary border-b pb-2">
+                            {room}
+                          </h4>
+                        )}
+
+                        {/* Line Items for this room */}
+                        <div className="space-y-4">
+                          {items.map((item) => {
+                            const quantity = item.quantity || 1
+                            const unit = item.unit || 'EA'
+                            const unitCost = item.unit_total_cost || (item.direct_cost ? item.direct_cost / quantity : 0)
+                            const isUpdating = updatingMargins.has(item.id)
+                            const isSaving = savingOverrides.has(item.id)
+
+                            return (
+                              <div
+                                key={item.id}
+                                className="border rounded-lg p-4 space-y-3 bg-card"
+                              >
+                                {/* Description */}
+                                <div className="font-medium text-base">
+                                  • {item.description || 'No description'}
+                                </div>
+
+                                {/* Pricing Grid */}
+                                <div className="space-y-3">
+                                  {/* First Row: Qty, Unit Cost, Labor, Material, OH, Direct */}
+                                  <div className="grid grid-cols-6 gap-4 items-center">
+                                    <div>
+                                      <div className="text-xs text-muted-foreground">Qty × Unit</div>
+                                      <div className="font-medium">
+                                        {quantity} {unit}
+                                      </div>
+                                    </div>
+
+                                    <div>
+                                      <div className="text-xs text-muted-foreground">Unit Cost</div>
+                                      <div className="font-medium">
+                                        {item.unit_total_cost !== null && item.unit_total_cost !== undefined
+                                          ? `$${unitCost.toFixed(2)}`
+                                          : item.direct_cost !== null && item.direct_cost !== undefined
+                                          ? `$${unitCost.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
+                                      </div>
+                                    </div>
+
+                                    <div>
+                                      <div className="text-xs text-muted-foreground">Labor</div>
+                                      <div className="font-medium text-sm">
+                                        {item.labor_cost !== null && item.labor_cost !== undefined
+                                          ? `$${item.labor_cost.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
+                                      </div>
+                                    </div>
+
+                                    <div>
+                                      <div className="text-xs text-muted-foreground">Material</div>
+                                      <div className="font-medium text-sm">
+                                        {item.material_cost !== null && item.material_cost !== undefined
+                                          ? `$${item.material_cost.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
+                                      </div>
+                                    </div>
+
+                                    <div>
+                                      <div className="text-xs text-muted-foreground">OH</div>
+                                      <div className="font-medium text-sm">
+                                        {item.overhead_cost !== null && item.overhead_cost !== undefined
+                                          ? `$${item.overhead_cost.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
+                                      </div>
+                                    </div>
+
+                                    <div>
+                                      <div className="text-xs text-muted-foreground">Direct Cost</div>
+                                      <div className="font-medium">
+                                        {item.direct_cost !== null && item.direct_cost !== undefined
+                                          ? `$${item.direct_cost.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Second Row: Margin, Client Price, Confidence */}
+                                  <div className="grid grid-cols-3 gap-4 items-center border-t pt-2">
+                                    <div>
+                                      <div className="text-xs text-muted-foreground mb-1">Margin %</div>
+                                      <Input
+                                        type="number"
+                                        value={item.margin_percent || 20}
+                                        min={0}
+                                        max={100}
+                                        step={0.1}
+                                        onChange={(e) => {
+                                          const margin = Number(e.target.value) || 0
+                                          updateMargin(item.id, margin)
+                                        }}
+                                        disabled={isUpdating}
+                                        className="w-20 h-8 text-sm"
+                                      />
+                                    </div>
+
+                                    <div>
+                                      <div className="text-xs text-muted-foreground">Client Price</div>
+                                      <div className="font-bold text-lg text-green-700">
+                                        {item.client_price !== null && item.client_price !== undefined
+                                          ? `$${item.client_price.toFixed(2)}`
+                                          : <span className="text-muted-foreground">—</span>}
+                                      </div>
+                                    </div>
+
+                                    <div>
+                                      <div className="text-xs text-muted-foreground">Match Confidence</div>
+                                      <div className="flex items-center gap-1">
+                                        <ConfidenceBadge value={item.confidence} />
+                                        {item.confidence !== null && item.confidence !== undefined && (item as any).matched_via && (
+                                          <span className="text-xs text-muted-foreground">
+                                            ({(item as any).matched_via})
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Actions Row */}
+                                <div className="flex items-center justify-between pt-2">
+                                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                    {item.pricing_source === 'user_library' && (
+                                      <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded">
+                                        Custom
+                                      </span>
+                                    )}
+                                    {item.pricing_source === 'task_library' && (
+                                      <span className="flex items-center gap-1">
+                                        <Sparkles className="h-3 w-3" />
+                                        System
+                                      </span>
+                                    )}
+                                    {item.pricing_source === 'manual' && (
+                                      <span className="flex items-center gap-1">
+                                        <Circle className="h-3 w-3" />
+                                        Manual
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Save as Standard Button */}
+                                  {item.pricing_source !== 'user_library' && item.task_library_id && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => saveAsStandard(item)}
+                                      disabled={isSaving}
+                                      className="text-xs"
+                                    >
+                                      {isSaving ? (
+                                        <>
+                                          <div className="mr-1 h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                                          Saving...
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Save className="mr-1 h-3 w-3" />
+                                          Save as Standard
+                                        </>
+                                      )}
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Totals Area */}
+      {!isLoading && lineItems.length > 0 && (
+        <Card className="bg-muted/50">
+          <CardContent className="py-6">
+            <div className="flex justify-end">
+              <div className="space-y-2 text-right">
+                <div className="flex items-center justify-between gap-8">
+                  <span className="text-muted-foreground">Total Direct Cost:</span>
+                  <span className="font-semibold text-lg">
+                    ${totals.directCost.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-8">
+                  <span className="text-muted-foreground">Total Margin:</span>
+                  <span className="font-semibold text-lg">
+                    ${totalMargin.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-8 border-t pt-2">
+                  <span className="text-muted-foreground font-semibold">Total Client Price:</span>
+                  <span className="font-bold text-2xl text-green-700">
+                    ${totals.clientPrice.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Selections & Allowances Summary */}
+      {!isLoading && activeEstimateId && (
+        <section className="mt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-base font-semibold">Selections & Allowances</h2>
+            <Link
+              href={`/projects/${project.id}?tab=selections`}
+              className="text-xs text-muted-foreground hover:text-foreground underline"
+            >
+              Manage selections
+            </Link>
+          </div>
+
+          {isLoadingSelections ? (
+            <Card>
+              <CardContent className="py-4">
+                <div className="text-center text-sm text-muted-foreground">
+                  Loading selections...
+                </div>
+              </CardContent>
+            </Card>
+          ) : selectionsError ? (
+            <Card>
+              <CardContent className="py-4">
+                <p className="text-xs text-destructive">
+                  Could not load selections right now.
+                </p>
+              </CardContent>
+            </Card>
+          ) : groupedSelections.length === 0 ? (
+            <Card>
+              <CardContent className="py-4">
+                <p className="text-xs text-muted-foreground">
+                  No selections or allowances detected yet for this estimate.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {groupedSelections.map(group => (
+                <div
+                  key={group.costCode}
+                  className="border rounded-lg px-3 py-2 bg-background/60 flex flex-col gap-1"
+                >
+                  <div className="flex items-baseline justify-between">
+                    <div className="font-semibold text-sm">
+                      {group.scopeLabel}
+                    </div>
+                    <div className="text-sm font-semibold">
+                      Allowance:{' '}
+                      <span className="tabular-nums">
+                        {formatCurrency(group.totalAllowance)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    {group.selections.map(sel => (
+                      <div key={sel.id} className="flex gap-1 flex-wrap">
+                        <span className="font-medium">
+                          {sel.room || sel.category || ''}{sel.room || sel.category ? ':' : ''}
+                        </span>
+                        <span>{sel.title || sel.description || ''}</span>
+                        {sel.subcontractor && (
+                          <span className="italic text-[11px] ml-1">
+                            (Sub: {sel.subcontractor})
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}

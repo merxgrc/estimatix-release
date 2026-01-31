@@ -72,7 +72,16 @@ export function EditableField({
       setIsEditing(false)
     } catch (error) {
       console.error(`Error saving ${label}:`, error)
-      alert(`Failed to save ${label.toLowerCase()}. Please try again.`)
+      
+      // Extract error message from various error formats
+      let errorMessage = `Failed to save ${label.toLowerCase()}. Please try again.`
+      if (error instanceof Error) {
+        errorMessage = error.message || errorMessage
+      } else if (error && typeof error === 'object' && 'message' in error) {
+        errorMessage = String(error.message) || errorMessage
+      }
+      
+      alert(errorMessage)
       setEditedValue(value || '') // Revert on error
     } finally {
       setIsSaving(false)

@@ -13,10 +13,12 @@ import Link from "next/link"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/db-client"
 import type { Project } from "@/types/db"
+import { useSidebar } from "@/lib/sidebar-context"
 
 export default function ProjectsPage() {
   const router = useRouter()
   const { user } = useAuth()
+  const { sidebarWidth, isCollapsed } = useSidebar()
   const [projects, setProjects] = useState<Project[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -101,7 +103,10 @@ export default function ProjectsPage() {
       <div className="flex min-h-screen">
         <Sidebar />
 
-        <div className="flex-1 md:ml-64">
+        <div 
+          className="flex-1 transition-all duration-200"
+          style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
+        >
         {/* Top Bar */}
         <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <div className="flex h-16 items-center justify-between px-4 md:px-6">
@@ -240,4 +245,5 @@ export default function ProjectsPage() {
     </AuthGuard>
   )
 }
+
 
