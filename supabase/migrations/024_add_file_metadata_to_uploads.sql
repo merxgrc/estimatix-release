@@ -56,3 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_uploads_file_type ON uploads(file_type);
 -- Note: The 'kind' column is kept for backward compatibility but 'tag' should be used going forward
 -- The 'kind' column can be deprecated in a future migration if needed
 
+
+
+
+

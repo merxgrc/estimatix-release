@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS public.selections (
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
-);
+);      
 
 -- Enable Row Level Security
 ALTER TABLE public.selections ENABLE ROW LEVEL SECURITY;
@@ -100,4 +100,11 @@ ALTER TABLE public.estimate_line_items
 
 -- Create index for selection_id foreign key lookups
 CREATE INDEX IF NOT EXISTS idx_estimate_line_items_selection_id ON public.estimate_line_items(selection_id);
+
+
+
+
+
+
+
 

@@ -10,15 +10,18 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
-import { Save, AlertTriangle, Plus, Trash2, FileText, Download, BookOpen, Wrench, Edit, RotateCcw, ChevronRight, ChevronDown, Sparkles } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { Save, AlertTriangle, Plus, Trash2, FileText, Download, BookOpen, Wrench, Edit, RotateCcw, ChevronRight, ChevronDown, Sparkles, History, Database, User, Info as InfoIcon } from 'lucide-react'
 import { supabase } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/auth-context'
 import { SmartRoomInput } from './SmartRoomInput'
 import { cn } from '@/lib/utils'
 import { COST_CATEGORIES, getCostCode, formatCostCode } from '@/lib/constants'
 import type { LineItem, EstimateData } from '@/types/estimate'
+import type { EstimateStatus } from '@/types/db'
 import { mergeEstimateItems, type EstimateItem } from '@/lib/estimate-utils'
 import { toast } from 'sonner'
+import { Lock } from 'lucide-react'
 
 // Unit options
 const UNIT_OPTIONS = ['EA', 'SF', 'LF', 'SQ', 'ROOM']
@@ -68,6 +71,52 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
   const itemsRef = useRef<LineItem[]>([])
   // Track original AI values for reset functionality
   const originalValuesRef = useRef<Map<string, Partial<LineItem>>>(new Map())
+  
+  // =============================================================================
+  // EDIT LOCK: Estimates are locked when status != 'draft'
+  // =============================================================================
+  const [estimateStatus, setEstimateStatus] = useState<EstimateStatus>('draft')
+  const isLocked = estimateStatus !== 'draft'
+  
+  // Fetch estimate status to determine if editing is allowed
+  useEffect(() => {
+    const fetchEstimateStatus = async () => {
+      if (!estimateId) {
+        setEstimateStatus('draft')
+        return
+      }
+      
+      try {
+        const { data, error } = await supabase
+          .from('estimates')
+          .select('status')
+          .eq('id', estimateId)
+          .single()
+        
+        if (!error && data?.status) {
+          setEstimateStatus(data.status as EstimateStatus)
+        }
+      } catch (err) {
+        console.error('Error fetching estimate status:', err)
+      }
+    }
+    
+    fetchEstimateStatus()
+  }, [estimateId])
+  
+  // Helper to get lock message based on status
+  const getLockMessage = (status: EstimateStatus): string => {
+    switch (status) {
+      case 'bid_final':
+        return 'This estimate is locked (Bid Finalized). Create a new estimate to make changes.'
+      case 'contract_signed':
+        return 'This estimate is locked (Contract Signed). Pricing cannot be modified.'
+      case 'completed':
+        return 'This project is completed. The estimate is read-only.'
+      default:
+        return 'This estimate is locked and cannot be edited.'
+    }
+  }
   
   const toggleRow = (itemId: string) => {
     setExpandedRows(prev => {
@@ -129,7 +178,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       try {
         const { data, error } = await supabase
           .from('estimate_line_items')
-          .select('*')
+          .select('*, price_source')
           .eq('estimate_id', estimateId)
           .order('created_at', { ascending: true })
 
@@ -179,6 +228,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
               margin_percent: isAllowance ? 0 : (item.margin_percent || 30), // Allowances have 0% margin
               client_price: clientPrice,
               pricing_source: item.pricing_source || null,
+              price_source: (item as any).price_source || item.pricing_source || null,
               confidence: item.confidence ?? null,
               is_allowance: isAllowance
             }
@@ -210,12 +260,13 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
             cost_code: item.cost_code || null, // Preserve cost_code from initialData, don't force 999
             quantity: (item as any).quantity || 1,
             unit: (item as any).unit || 'EA',
-            labor_cost: (item as any).labor_cost || 0,
-            material_cost: (item as any).material_cost || 0,
-            overhead_cost: (item as any).overhead_cost || 0,
-            direct_cost: (item as any).direct_cost || 0,
+            // Preserve null for unpriced items (null ≠ 0)
+            labor_cost: (item as any).labor_cost ?? null,
+            material_cost: (item as any).material_cost ?? null,
+            overhead_cost: (item as any).overhead_cost ?? null,
+            direct_cost: (item as any).direct_cost ?? null,
             margin_percent: (item as any).margin_percent || 30,
-            client_price: (item as any).client_price || 0,
+            client_price: (item as any).client_price ?? null,
             pricing_source: (item as any).pricing_source || null,
             confidence: (item as any).confidence ?? null
           })))
@@ -233,12 +284,13 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
         cost_code: '999',
         quantity: (item as any).quantity || 1,
         unit: (item as any).unit || 'EA',
-        labor_cost: (item as any).labor_cost || 0,
-        material_cost: (item as any).material_cost || 0,
-        overhead_cost: (item as any).overhead_cost || 0,
-        direct_cost: (item as any).direct_cost || 0,
+        // Preserve null for unpriced items (null ≠ 0)
+        labor_cost: (item as any).labor_cost ?? null,
+        material_cost: (item as any).material_cost ?? null,
+        overhead_cost: (item as any).overhead_cost ?? null,
+        direct_cost: (item as any).direct_cost ?? null,
         margin_percent: (item as any).margin_percent || 30,
-        client_price: (item as any).client_price || 0,
+        client_price: (item as any).client_price ?? null,
         pricing_source: (item as any).pricing_source || null,
         confidence: (item as any).confidence ?? null
       })))
@@ -282,6 +334,14 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
   const saveLineItem = async (itemId: string | undefined, item: LineItem) => {
     if (!itemId || !estimateId || !projectId) return
 
+    // =============================================================================
+    // EDIT LOCK: Block saves when estimate is not in draft status
+    // =============================================================================
+    if (isLocked) {
+      console.warn(`saveLineItem blocked: estimate is locked (status=${estimateStatus})`)
+      return
+    }
+
     // Clear existing timeout for this item
     const existingTimeout = saveTimeoutRef.current.get(itemId)
     if (existingTimeout) {
@@ -298,12 +358,13 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           cost_code: item.cost_code || null,
           quantity: item.quantity || 1,
           unit: item.unit || 'EA',
-          labor_cost: item.labor_cost || 0,
-          material_cost: item.material_cost || 0,
-          overhead_cost: item.overhead_cost || 0,
-          direct_cost: item.direct_cost || 0,
+          // Preserve null for unpriced items (null means "unpriced", 0 means "$0")
+          labor_cost: item.labor_cost ?? null,
+          material_cost: item.material_cost ?? null,
+          overhead_cost: item.overhead_cost ?? null,
+          direct_cost: item.direct_cost ?? null,
           margin_percent: item.margin_percent || 30,
-          client_price: item.client_price || 0,
+          client_price: item.client_price ?? null,
           pricing_source: item.pricing_source || null, // Preserve existing source (manual if user edited, otherwise original)
           confidence: item.confidence ?? null
         }
@@ -457,10 +518,10 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           // Calculate direct_cost if it's not provided
           const directCost = updates.direct_cost !== undefined 
             ? updates.direct_cost 
-            : (item.direct_cost || (
-                (updates.labor_cost !== undefined ? updates.labor_cost : item.labor_cost || 0) +
-                (updates.material_cost !== undefined ? updates.material_cost : item.material_cost || 0) +
-                (updates.overhead_cost !== undefined ? updates.overhead_cost : item.overhead_cost || 0)
+            : (item.direct_cost ?? (
+                ((updates.labor_cost ?? item.labor_cost) ?? 0) +
+                ((updates.material_cost ?? item.material_cost) ?? 0) +
+                ((updates.overhead_cost ?? item.overhead_cost) ?? 0)
               ))
           
           const marginPercent = updates.margin_percent !== undefined ? updates.margin_percent : item.margin_percent || 30
@@ -481,8 +542,8 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       }
       
       // Final validation: ensure client_price is not NaN or 0 when we have valid costs
-      const finalDirectCost = item.direct_cost || (item.labor_cost || 0) + (item.material_cost || 0) + (item.overhead_cost || 0)
-      if ((isNaN(item.client_price) || item.client_price === 0) && finalDirectCost > 0 && !isAllowance) {
+      const finalDirectCost = item.direct_cost ?? ((item.labor_cost ?? 0) + (item.material_cost ?? 0) + (item.overhead_cost ?? 0))
+      if ((item.client_price == null || isNaN(item.client_price) || item.client_price === 0) && finalDirectCost > 0 && !isAllowance) {
         const margin = item.margin_percent || 30
         item.client_price = finalDirectCost * (1 + margin / 100)
       }
@@ -512,6 +573,15 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
   }
 
   const addItem = () => {
+    // =============================================================================
+    // EDIT LOCK: Block adding items when estimate is not in draft status
+    // =============================================================================
+    if (isLocked) {
+      console.warn(`addItem blocked: estimate is locked (status=${estimateStatus})`)
+      toast.error(getLockMessage(estimateStatus))
+      return
+    }
+
     setItems(prevItems => [
       ...prevItems,
       {
@@ -521,19 +591,34 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
         cost_code: '999',
         quantity: 1,
         unit: 'EA',
-        labor_cost: 0,
-        material_cost: 0,
-        overhead_cost: 0,
-        direct_cost: 0,
+        // =============================================================================
+        // UNPRICED ITEMS: Use null (not 0) to indicate "no price set"
+        // =============================================================================
+        // null = user has not entered a price yet
+        // 0 = user explicitly set the price to $0 (e.g., free item, owner-provided)
+        // =============================================================================
+        labor_cost: null,
+        material_cost: null,
+        overhead_cost: null,
+        direct_cost: null,
         margin_percent: 30,
-        client_price: 0,
-        pricing_source: 'manual' as const,
+        client_price: null,
+        pricing_source: null, // No pricing source until priced
         confidence: null
       }
     ])
   }
 
   const removeItem = async (index: number) => {
+    // =============================================================================
+    // EDIT LOCK: Block deletes when estimate is not in draft status
+    // =============================================================================
+    if (isLocked) {
+      console.warn(`removeItem blocked: estimate is locked (status=${estimateStatus})`)
+      toast.error(getLockMessage(estimateStatus))
+      return
+    }
+
     const item = items[index]
     if (item.id && !item.id.startsWith('temp-')) {
       // Delete from database
@@ -558,7 +643,11 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     setItems(prevItems => prevItems.filter((_, i) => i !== index))
   }
 
-  const grandTotal = items.reduce((sum, item) => sum + (item.client_price || 0), 0)
+  // =============================================================================
+  // TOTALS: Treat null as 0 for summation, but track unpriced items separately
+  // =============================================================================
+  const grandTotal = items.reduce((sum, item) => sum + (item.client_price ?? 0), 0)
+  const unpricedItemCount = items.filter(item => item.direct_cost === null || item.direct_cost === undefined).length
 
   // Get title from description (first 50 chars or first sentence)
   const getTitle = (description: string): string => {
@@ -575,12 +664,14 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     value,
     onChange,
     onBlur,
-    placeholder
+    placeholder,
+    disabled
   }: {
     value: string
     onChange: (value: string) => void
     onBlur?: () => void
     placeholder?: string
+    disabled?: boolean
   }) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -609,6 +700,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
         onBlur={onBlur}
         placeholder={placeholder}
         className="min-h-[80px] text-sm resize-none"
+        disabled={disabled}
       />
     )
   }
@@ -782,12 +874,13 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
         cost_code: mergedItem.cost_code,
         quantity: mergedItem.quantity || 1,
         unit: mergedItem.unit || 'EA',
-        labor_cost: mergedItem.labor_cost || 0,
-        material_cost: mergedItem.material_cost || 0,
-        overhead_cost: mergedItem.overhead_cost || 0, // Now tracked in EstimateItem merge logic
-        direct_cost: mergedItem.direct_cost || (mergedItem.unit_cost && mergedItem.quantity ? mergedItem.unit_cost * mergedItem.quantity : 0),
+        // Preserve null for unpriced items
+        labor_cost: mergedItem.labor_cost ?? null,
+        material_cost: mergedItem.material_cost ?? null,
+        overhead_cost: mergedItem.overhead_cost ?? null,
+        direct_cost: mergedItem.direct_cost ?? (mergedItem.unit_cost && mergedItem.quantity ? mergedItem.unit_cost * mergedItem.quantity : null),
         margin_percent: mergedItem.margin_percent || 30,
-        client_price: mergedItem.client_price || 0,
+        client_price: mergedItem.client_price ?? null,
         pricing_source: (mergedItem.pricing_source as 'task_library' | 'user_library' | 'manual' | null) || null,
         confidence: mergedItem.confidence || null,
         notes: mergedItem.notes ?? undefined
@@ -911,12 +1004,13 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           cost_code: item.cost_code || null, // Don't force 999 - preserve null if not set
           quantity: item.quantity || 1,
           unit: item.unit || 'EA',
-          labor_cost: item.labor_cost || 0,
-          material_cost: item.material_cost || 0,
-          overhead_cost: item.overhead_cost || 0,
-          direct_cost: item.direct_cost || 0,
+          // Preserve null for unpriced items (null ≠ 0)
+          labor_cost: item.labor_cost ?? null,
+          material_cost: item.material_cost ?? null,
+          overhead_cost: item.overhead_cost ?? null,
+          direct_cost: item.direct_cost ?? null,
           margin_percent: item.margin_percent || 30,
-          client_price: item.client_price || 0,
+          client_price: item.client_price ?? null,
           pricing_source: item.pricing_source || null,
           confidence: item.confidence ?? null
         }
@@ -992,12 +1086,13 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           cost_code: item.cost_code || null, // Preserve cost_code from database, don't force 999
           quantity: item.quantity || 1,
           unit: item.unit || 'EA',
-          labor_cost: item.labor_cost || 0,
-          material_cost: item.material_cost || 0,
-          overhead_cost: item.overhead_cost || 0,
-          direct_cost: item.direct_cost || 0,
+          // Preserve null for unpriced items (null ≠ 0)
+          labor_cost: item.labor_cost ?? null,
+          material_cost: item.material_cost ?? null,
+          overhead_cost: item.overhead_cost ?? null,
+          direct_cost: item.direct_cost ?? null,
           margin_percent: item.margin_percent || 30,
-          client_price: item.client_price || 0,
+          client_price: item.client_price ?? null,
           pricing_source: item.pricing_source || null,
           confidence: item.confidence ?? null
         })))
@@ -1090,6 +1185,16 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
 
   return (
     <div className="space-y-6">
+      {/* Edit Lock Banner - shows when estimate is not in draft status */}
+      {isLocked && (
+        <Alert className="border-blue-200 bg-blue-50">
+          <Lock className="h-4 w-4 text-blue-600" />
+          <AlertDescription className="text-blue-800">
+            {getLockMessage(estimateStatus)}
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Blocked Action Message */}
       {blockedActionMessage && (
         <Alert className="border-amber-200 bg-amber-50">
@@ -1116,12 +1221,17 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           <div className="flex items-center justify-between">
             <div>
               <CardTitle>Project Estimate</CardTitle>
-              <CardDescription>
-                {items.length} line items • Total: ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              <CardDescription className="flex items-center gap-2">
+                <span>{items.length} line items • Total: ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                {unpricedItemCount > 0 && (
+                  <span className="text-amber-600 font-medium">
+                    • {unpricedItemCount} unpriced
+                  </span>
+                )}
               </CardDescription>
             </div>
             <div className="flex gap-2">
-              <Button onClick={addItem} variant="outline" size="sm">
+              <Button onClick={addItem} variant="outline" size="sm" disabled={isLocked}>
                 <Plus className="mr-2 h-4 w-4" />
                 Add Item
               </Button>
@@ -1274,6 +1384,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                               placeholder="Room"
                               options={ROOM_OPTIONS}
                               className="min-w-[100px]"
+                              disabled={isLocked}
                             />
                           </TableCell>
                           <TableCell className="py-1 px-2">
@@ -1286,7 +1397,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                   category: selected?.label || 'Other'
                                 })
                               }}
-                              disabled={isLoadingCostCodes}
+                              disabled={isLoadingCostCodes || isLocked}
                             >
                               <SelectTrigger className="h-7 text-xs w-[100px]">
                                 <SelectValue placeholder={isLoadingCostCodes ? "Loading..." : "Code"} />
@@ -1320,10 +1431,12 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                 className="h-7 w-12 text-xs text-center tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 min="0"
                                 step="0.01"
+                                disabled={isLocked}
                               />
                               <Select
                                 value={item.unit || 'EA'}
                                 onValueChange={(value) => updateItem(index, { unit: value })}
+                                disabled={isLocked}
                               >
                                 <SelectTrigger className="h-7 text-xs w-[60px]">
                                   <SelectValue />
@@ -1341,21 +1454,79 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                               <span className="text-xs text-muted-foreground">$</span>
                               <Input
                                 type="number"
-                                value={item.direct_cost || 0}
+                                value={item.direct_cost ?? ''}
+                                placeholder="Enter price"
                                 onChange={(e) => {
-                                  const value = validateNumeric(e.target.value)
+                                  // Parse value: empty string → null, otherwise number
+                                  const rawValue = e.target.value
+                                  const value = rawValue === '' ? null : validateNumeric(rawValue)
                                   updateItem(index, { direct_cost: value })
                                 }}
                                 onBlur={() => {
                                   const currentItem = itemsRef.current[index]
                                   if (currentItem?.id) {
                                     saveLineItem(currentItem.id, currentItem)
+                                    // =================================================================
+                                    // NO PRICING EVENTS HERE - DRAFTS ARE EXCLUDED
+                                    // =================================================================
+                                    // Per PRODUCT_CONTEXT.md:
+                                    // - pricing_events are logged ONLY at commit moments:
+                                    //   * finalizeBid() → stage='bid_final'
+                                    //   * markContractSigned() → stage='contract_signed'
+                                    // - Draft edits (blur, keystroke) are NOT logged because:
+                                    //   1. Contractors experiment with prices before committing
+                                    //   2. Logging drafts would capture noise, not signal
+                                    //   3. Only committed prices represent "truth"
+                                    // =================================================================
                                   }
                                 }}
                                 className="h-7 w-24 text-xs text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 min="0"
                                 step="0.01"
+                                disabled={isLocked}
                               />
+                              {/* Pricing Badge */}
+                              {(() => {
+                                const priceSource = (item as any).price_source || item.pricing_source || null
+                                if (!priceSource) return null
+
+                                let icon: React.ReactNode
+                                let color: string
+                                let tooltip: string
+
+                                if (priceSource === 'history' || priceSource === 'actual') {
+                                  icon = <History className="h-3 w-3" />
+                                  color = 'text-green-600 bg-green-50 border-green-200'
+                                  tooltip = 'Price based on your actual costs from completed jobs'
+                                } else if (priceSource === 'seed' || priceSource === 'task_library') {
+                                  icon = <Database className="h-3 w-3" />
+                                  color = 'text-blue-600 bg-blue-50 border-blue-200'
+                                  tooltip = 'Estimatix market rate (based on your quality tier)'
+                                } else if (priceSource === 'manual' || priceSource === 'manual_override') {
+                                  icon = <User className="h-3 w-3" />
+                                  color = 'text-yellow-600 bg-yellow-50 border-yellow-200'
+                                  tooltip = 'Manually set price'
+                                } else {
+                                  icon = <InfoIcon className="h-3 w-3" />
+                                  color = 'text-gray-600 bg-gray-50 border-gray-200'
+                                  tooltip = `Price source: ${priceSource}`
+                                }
+
+                                return (
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <div className={cn("ml-1 p-0.5 rounded border cursor-help", color)}>
+                                          {icon}
+                                        </div>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p className="text-xs">{tooltip}</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                )
+                              })()}
                             </div>
                           </TableCell>
                           <TableCell className="text-right py-1 px-2">
@@ -1372,7 +1543,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                       value={marginValue}
                                       min={0}
                                       max={60}
-                                      disabled={isAllowance}
+                                      disabled={isAllowance || isLocked}
                                       onChange={(e) => {
                                         if (!isAllowance) {
                                           const margin = Number(e.target.value) || 0
@@ -1393,7 +1564,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                       }}
                                       className={cn(
                                         "h-7 w-14 text-xs text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
-                                        isAllowance && "bg-muted cursor-not-allowed opacity-70"
+                                        (isAllowance || isLocked) && "bg-muted cursor-not-allowed opacity-70"
                                       )}
                                     />
                                     <span className="text-xs text-muted-foreground">%</span>
@@ -1407,9 +1578,11 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                               <span className="text-xs text-muted-foreground font-semibold text-green-700">$</span>
                               <Input
                                 type="number"
-                                value={item.client_price || 0}
+                                value={item.client_price ?? ''}
+                                placeholder="—"
                                 onChange={(e) => {
-                                  const value = validateNumeric(e.target.value)
+                                  const rawValue = e.target.value
+                                  const value = rawValue === '' ? null : validateNumeric(rawValue)
                                   updateItem(index, { client_price: value })
                                 }}
                                 onBlur={() => {
@@ -1418,9 +1591,13 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                     saveLineItem(currentItem.id, currentItem)
                                   }
                                 }}
-                                className="h-7 w-28 text-xs text-right font-semibold text-green-700 tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                className={cn(
+                                  "h-7 w-28 text-xs text-right font-semibold tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
+                                  item.client_price != null ? "text-green-700" : "text-muted-foreground"
+                                )}
                                 min="0"
                                 step="0.01"
+                                disabled={isLocked}
                               />
                             </div>
                           </TableCell>
@@ -1446,6 +1623,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                       }
                                     }}
                                     placeholder="Full item description..."
+                                    disabled={isLocked}
                                   />
                                 </div>
 
@@ -1455,9 +1633,11 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                     <Label className="text-xs text-muted-foreground mb-1 block">Labor Cost</Label>
                                     <Input
                                       type="number"
-                                      value={item.labor_cost || 0}
+                                      value={item.labor_cost ?? ''}
+                                      placeholder="—"
                                       onChange={(e) => {
-                                        const value = validateNumeric(e.target.value)
+                                        const rawValue = e.target.value
+                                        const value = rawValue === '' ? null : validateNumeric(rawValue)
                                         updateItem(index, { labor_cost: value })
                                       }}
                                       onBlur={() => {
@@ -1469,15 +1649,18 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                       className="h-8 text-sm text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                       min="0"
                                       step="0.01"
+                                      disabled={isLocked}
                                     />
                                   </div>
                                   <div>
                                     <Label className="text-xs text-muted-foreground mb-1 block">Material Cost</Label>
                                     <Input
                                       type="number"
-                                      value={item.material_cost || 0}
+                                      value={item.material_cost ?? ''}
+                                      placeholder="—"
                                       onChange={(e) => {
-                                        const value = validateNumeric(e.target.value)
+                                        const rawValue = e.target.value
+                                        const value = rawValue === '' ? null : validateNumeric(rawValue)
                                         updateItem(index, { material_cost: value })
                                       }}
                                       onBlur={() => {
@@ -1489,15 +1672,18 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                       className="h-8 text-sm text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                       min="0"
                                       step="0.01"
+                                      disabled={isLocked}
                                     />
                                   </div>
                                   <div>
                                     <Label className="text-xs text-muted-foreground mb-1 block">Overhead</Label>
                                     <Input
                                       type="number"
-                                      value={item.overhead_cost || 0}
+                                      value={item.overhead_cost ?? ''}
+                                      placeholder="—"
                                       onChange={(e) => {
-                                        const value = validateNumeric(e.target.value)
+                                        const rawValue = e.target.value
+                                        const value = rawValue === '' ? null : validateNumeric(rawValue)
                                         updateItem(index, { overhead_cost: value })
                                       }}
                                       onBlur={() => {
@@ -1509,6 +1695,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                       className="h-8 text-sm text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                       min="0"
                                       step="0.01"
+                                      disabled={isLocked}
                                     />
                                   </div>
                                   <div>
@@ -1570,7 +1757,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                       </Badge>
                                     </div>
                                   )}
-                                  {originalValuesRef.current.has(itemId) && item.pricing_source === 'manual' && (
+                                  {originalValuesRef.current.has(itemId) && item.pricing_source === 'manual' && !isLocked && (
                                     <Button
                                       variant="ghost"
                                       size="sm"
@@ -1587,6 +1774,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                     variant="ghost"
                                     size="sm"
                                     className="h-6 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 ml-auto"
+                                    disabled={isLocked}
                                   >
                                     <Trash2 className="h-3 w-3 mr-1" />
                                     Delete
@@ -1615,6 +1803,11 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                   <div className="text-sm text-muted-foreground">
                     {items.length} line items
                   </div>
+                  {unpricedItemCount > 0 && (
+                    <div className="text-sm text-amber-600 font-medium mt-1">
+                      ⚠ {unpricedItemCount} item{unpricedItemCount !== 1 ? 's' : ''} missing pricing
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

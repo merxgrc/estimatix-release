@@ -252,7 +252,7 @@ export async function POST(
     // 2. Load estimate and verify ownership
     const { data: estimate, error: estimateError } = await supabase
       .from('estimates')
-      .select('id, project_id')
+      .select('id, project_id, status')
       .eq('id', estimateId)
       .single()
 
@@ -260,6 +260,22 @@ export async function POST(
       return NextResponse.json(
         { error: 'Estimate not found' },
         { status: 404 }
+      )
+    }
+
+    // =============================================================================
+    // EDIT LOCK: Estimates can only be modified when status='draft'
+    // =============================================================================
+    // Finalized/signed estimates are locked to preserve pricing integrity.
+    // This prevents accidental changes after bid submission or contract signing.
+    // =============================================================================
+    if (estimate.status !== 'draft') {
+      const statusLabel = estimate.status === 'bid_final' ? 'Bid Finalized' :
+                         estimate.status === 'contract_signed' ? 'Contract Signed' :
+                         estimate.status === 'completed' ? 'Completed' : 'Locked'
+      return NextResponse.json(
+        { error: `Cannot modify estimate: ${statusLabel}. Estimates can only be edited while in draft status.` },
+        { status: 403 }
       )
     }
 

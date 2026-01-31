@@ -6,6 +6,27 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
+// =============================================================================
+// Estimate Lifecycle Status (defined early for use in Database interface)
+// =============================================================================
+
+/**
+ * Estimate lifecycle states.
+ * 
+ * Transitions (ONLY these are allowed):
+ * - draft → bid_final
+ * - bid_final → contract_signed
+ * - contract_signed → completed
+ * 
+ * PRICING TRUTH is captured at:
+ * - bid_final: User has finalized their bid pricing
+ * - contract_signed: Contract generated and accepted
+ * 
+ * draft prices are NOT treated as truth (still being edited).
+ * completed stage is for capturing actuals post-job.
+ */
+export type EstimateStatus = 'draft' | 'bid_final' | 'contract_signed' | 'completed'
+
 export interface Database {
   public: {
     Tables: {
@@ -28,6 +49,7 @@ export interface Database {
           job_deadline: string | null
           missing_data_count: number | null
           last_summary_update: string | null
+          status: 'draft' | 'active' | 'completed' | null
           created_at: string
         }
         Insert: {
@@ -48,6 +70,7 @@ export interface Database {
           job_deadline?: string | null
           missing_data_count?: number | null
           last_summary_update?: string | null
+          status?: 'draft' | 'active' | 'completed' | null
           created_at?: string
         }
         Update: {
@@ -68,6 +91,7 @@ export interface Database {
           job_deadline?: string | null
           missing_data_count?: number | null
           last_summary_update?: string | null
+          status?: 'draft' | 'active' | 'completed' | null
           created_at?: string
         }
         Relationships: []
@@ -79,6 +103,8 @@ export interface Database {
           company_name: string | null
           phone: string | null
           role: string | null
+          region_factor: number | null
+          quality_tier: 'budget' | 'standard' | 'premium' | null
           created_at: string
           updated_at: string
         }
@@ -88,6 +114,8 @@ export interface Database {
           company_name?: string | null
           phone?: string | null
           role?: string | null
+          region_factor?: number | null
+          quality_tier?: 'budget' | 'standard' | 'premium' | null
           created_at?: string
           updated_at?: string
         }
@@ -97,6 +125,8 @@ export interface Database {
           company_name?: string | null
           phone?: string | null
           role?: string | null
+          region_factor?: number | null
+          quality_tier?: 'budget' | 'standard' | 'premium' | null
           created_at?: string
           updated_at?: string
         }
@@ -134,6 +164,7 @@ export interface Database {
           selection_id: string | null
           task_library_id: string | null
           pricing_source: string | null
+          price_source: 'manual' | 'history' | 'seed' | 'ai' | 'task_library' | 'user_library' | null
           matched_via: string | null
           is_allowance: boolean | null
           is_active: boolean | null
@@ -163,6 +194,7 @@ export interface Database {
           selection_id?: string | null
           task_library_id?: string | null
           pricing_source?: string | null
+          price_source?: 'manual' | 'history' | 'seed' | 'ai' | 'task_library' | 'user_library' | null
           matched_via?: string | null
           is_allowance?: boolean | null
           is_active?: boolean | null
@@ -192,6 +224,7 @@ export interface Database {
           selection_id?: string | null
           task_library_id?: string | null
           pricing_source?: string | null
+          price_source?: 'manual' | 'history' | 'seed' | 'ai' | 'task_library' | 'user_library' | null
           matched_via?: string | null
           is_allowance?: boolean | null
           is_active?: boolean | null
@@ -390,6 +423,13 @@ export interface Database {
           json_data: Json
           ai_summary: string | null
           total: number | null
+          /**
+           * Estimate lifecycle state.
+           * PRICING TRUTH is captured at 'bid_final' and 'contract_signed' ONLY.
+           * 'draft' prices are working values, not truth.
+           */
+          status: EstimateStatus
+          status_changed_at: string | null
           created_at: string
         }
         Insert: {
@@ -398,6 +438,8 @@ export interface Database {
           json_data: Json
           ai_summary?: string | null
           total?: number | null
+          status?: EstimateStatus
+          status_changed_at?: string | null
           created_at?: string
         }
         Update: {
@@ -406,6 +448,8 @@ export interface Database {
           json_data?: Json
           ai_summary?: string | null
           total?: number | null
+          status?: EstimateStatus
+          status_changed_at?: string | null
           created_at?: string
         }
         Relationships: [
@@ -449,6 +493,95 @@ export interface Database {
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      user_cost_library: {
+        Row: {
+          id: string
+          user_id: string
+          task_library_id: string | null
+          unit_cost: number
+          is_actual: boolean | null
+          source: 'estimate' | 'actual' | 'copilot' | 'manual'
+          cost_code: string | null
+          description: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          task_library_id?: string | null
+          unit_cost: number
+          is_actual?: boolean | null
+          source: 'estimate' | 'actual' | 'copilot' | 'manual'
+          cost_code?: string | null
+          description?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          task_library_id?: string | null
+          unit_cost?: number
+          is_actual?: boolean | null
+          source?: 'estimate' | 'actual' | 'copilot' | 'manual'
+          cost_code?: string | null
+          description?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_cost_library_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_cost_library_task_library_id_fkey"
+            columns: ["task_library_id"]
+            isOneToOne: false
+            referencedRelation: "task_library"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      user_margin_rules: {
+        Row: {
+          id: string
+          user_id: string
+          scope: string
+          margin_percent: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          scope: string
+          margin_percent: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          scope?: string
+          margin_percent?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_margin_rules_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           }
         ]
@@ -563,4 +696,272 @@ export type ProjectWithEstimates = Project & {
 export type ProjectWithUploadsAndEstimates = Project & {
   uploads: Upload[]
   estimates: Estimate[]
+}
+
+// =============================================================================
+// Estimate Lifecycle Helpers
+// =============================================================================
+
+/**
+ * Valid state transitions for estimates
+ */
+export const ESTIMATE_STATUS_TRANSITIONS: Record<EstimateStatus, EstimateStatus[]> = {
+  draft: ['bid_final'],
+  bid_final: ['contract_signed'],
+  contract_signed: ['completed'],
+  completed: [] // Terminal state
+}
+
+/**
+ * States where pricing is considered "truth" for learning
+ */
+export const PRICING_TRUTH_STATES: EstimateStatus[] = ['bid_final', 'contract_signed']
+
+/**
+ * Check if a status transition is valid
+ */
+export function isValidEstimateTransition(from: EstimateStatus, to: EstimateStatus): boolean {
+  return ESTIMATE_STATUS_TRANSITIONS[from]?.includes(to) ?? false
+}
+
+/**
+ * Check if pricing at this state should be treated as truth
+ */
+export function isPricingTruthState(status: EstimateStatus): boolean {
+  return PRICING_TRUTH_STATES.includes(status)
+}
+
+// =============================================================================
+// Pricing Feedback System Types (Milestone A)
+// =============================================================================
+
+/**
+ * Source of pricing in the waterfall
+ */
+export type PricingSource = 'manual' | 'user_library' | 'task_library' | 'ai'
+
+/**
+ * User action on pricing
+ * 
+ * - 'entered': Manual entry with no suggestion (Phase 1 baseline)
+ * - 'accepted': Used a suggestion as-is
+ * - 'edited': Modified a suggestion
+ * - 'rejected': Explicitly rejected a suggestion
+ */
+export type PricingUserAction = 'entered' | 'accepted' | 'edited' | 'rejected'
+
+/**
+ * Pricing event record - captures pricing feedback for analytics
+ */
+export interface PricingEvent {
+  id: string
+  created_at: string
+  user_id: string
+  project_id: string | null
+  estimate_id: string | null
+  line_item_id: string | null
+  region: string | null
+  unit: string | null
+  quantity: number | null
+  source: PricingSource
+  matched_task_id: string | null
+  match_confidence: number | null
+  suggested_unit_cost: number | null
+  final_unit_cost: number
+  user_action: PricingUserAction
+  meta: Record<string, unknown>
+}
+
+export interface PricingEventInsert {
+  id?: string
+  created_at?: string
+  user_id: string
+  project_id?: string | null
+  estimate_id?: string | null
+  line_item_id?: string | null
+  region?: string | null
+  unit?: string | null
+  quantity?: number | null
+  source: PricingSource
+  matched_task_id?: string | null
+  match_confidence?: number | null
+  suggested_unit_cost?: number | null
+  final_unit_cost: number
+  user_action: PricingUserAction
+  meta?: Record<string, unknown>
+}
+
+/**
+ * User cost library entry - user-saved pricing by task key
+ */
+export interface UserCostLibraryEntry {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  task_key: string | null
+  region: string | null
+  unit_cost: number
+  unit: string | null
+  usage_count: number
+  last_used_at: string | null
+  notes: string | null
+  // Legacy fields for backward compatibility
+  task_library_id: string | null
+  is_actual: boolean | null
+  source: string | null
+  cost_code: string | null
+  description: string | null
+}
+
+export interface UserCostLibraryInsert {
+  id?: string
+  created_at?: string
+  updated_at?: string
+  user_id: string
+  task_key?: string | null
+  region?: string | null
+  unit_cost: number
+  unit?: string | null
+  usage_count?: number
+  last_used_at?: string | null
+  notes?: string | null
+  task_library_id?: string | null
+  is_actual?: boolean | null
+  source?: string | null
+  cost_code?: string | null
+  description?: string | null
+}
+
+export interface UserCostLibraryUpdate {
+  id?: string
+  updated_at?: string
+  task_key?: string | null
+  region?: string | null
+  unit_cost?: number
+  unit?: string | null
+  usage_count?: number
+  last_used_at?: string | null
+  notes?: string | null
+}
+
+/**
+ * Structured pricing decision result from the pricing engine
+ */
+export interface PricingDecision {
+  unitCost: number
+  source: PricingSource
+  matchedTaskId?: string | null
+  matchConfidence?: number | null
+  suggestedUnitCost?: number | null
+  taskKey?: string | null
+}
+
+// =============================================================================
+// Job Actuals Types (Phase 1.5)
+// =============================================================================
+
+/**
+ * Project-level actuals record.
+ * Stores actual costs after job completion.
+ * 
+ * IMPORTANT: Actuals are stored SEPARATELY from estimates (never overwrite).
+ * This data will later feed:
+ * - Estimation accuracy tracking
+ * - Pricing intelligence
+ * - Variance analysis
+ */
+export interface ProjectActuals {
+  id: string
+  project_id: string
+  estimate_id: string | null
+  total_actual_cost: number | null
+  total_actual_labor_cost: number | null
+  total_actual_material_cost: number | null
+  actual_labor_hours: number | null
+  variance_amount: number | null
+  variance_percent: number | null
+  notes: string | null
+  closed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectActualsInsert {
+  id?: string
+  project_id: string
+  estimate_id?: string | null
+  total_actual_cost?: number | null
+  total_actual_labor_cost?: number | null
+  total_actual_material_cost?: number | null
+  actual_labor_hours?: number | null
+  variance_amount?: number | null
+  variance_percent?: number | null
+  notes?: string | null
+  closed_at?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ProjectActualsUpdate {
+  total_actual_cost?: number | null
+  total_actual_labor_cost?: number | null
+  total_actual_material_cost?: number | null
+  actual_labor_hours?: number | null
+  variance_amount?: number | null
+  variance_percent?: number | null
+  notes?: string | null
+  closed_at?: string | null
+  updated_at?: string
+}
+
+/**
+ * Line item-level actuals record.
+ * Stores per-line-item actual costs for detailed tracking.
+ */
+export interface LineItemActuals {
+  id: string
+  project_actuals_id: string
+  line_item_id: string
+  actual_unit_cost: number | null
+  actual_quantity: number | null
+  actual_direct_cost: number | null
+  actual_labor_cost: number | null
+  actual_material_cost: number | null
+  actual_labor_hours: number | null
+  variance_amount: number | null
+  variance_percent: number | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface LineItemActualsInsert {
+  id?: string
+  project_actuals_id: string
+  line_item_id: string
+  actual_unit_cost?: number | null
+  actual_quantity?: number | null
+  actual_direct_cost?: number | null
+  actual_labor_cost?: number | null
+  actual_material_cost?: number | null
+  actual_labor_hours?: number | null
+  variance_amount?: number | null
+  variance_percent?: number | null
+  notes?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface LineItemActualsUpdate {
+  actual_unit_cost?: number | null
+  actual_quantity?: number | null
+  actual_direct_cost?: number | null
+  actual_labor_cost?: number | null
+  actual_material_cost?: number | null
+  actual_labor_hours?: number | null
+  variance_amount?: number | null
+  variance_percent?: number | null
+  notes?: string | null
+  updated_at?: string
 }

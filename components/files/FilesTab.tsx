@@ -464,3 +464,7 @@ export function FilesTab({ projectId, onUseInCopilot }: FilesTabProps) {
   )
 }
 
+
+
+
+

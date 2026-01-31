@@ -11,13 +11,15 @@ export interface LineItem {
   cost_code: string | null // Allow null - don't force 999
   quantity: number
   unit: string
-  labor_cost: number
-  material_cost?: number
-  overhead_cost?: number
-  direct_cost?: number
+  labor_cost: number | null  // null = unpriced
+  material_cost?: number | null  // null = unpriced
+  overhead_cost?: number | null  // null = unpriced
+  direct_cost?: number | null  // null = unpriced (different from 0 which means "free")
   margin_percent: number
-  client_price: number
-  pricing_source?: 'task_library' | 'user_library' | 'manual' | 'ai' | null
+  client_price: number | null  // null = unpriced
+  pricing_source?: 'task_library' | 'user_library' | 'manual' | 'ai' | 'history' | 'seed' | null
+  price_source?: 'manual' | 'history' | 'seed' | 'ai' | 'task_library' | 'user_library' | null
+  task_library_id?: string | null
   confidence?: number | null
   notes?: string
   is_allowance?: boolean | null // Flag to indicate if this is an allowance item

@@ -42,7 +42,7 @@ async function parsePdfWithFallback(buffer: Buffer, storagePath: string): Promis
 
     // Fallback: pdf2json (event-based)
     try {
-      const parser = new PDFParser(undefined, 1) // 1 = raw text mode
+      const parser = new PDFParser(undefined, true) // true = raw text mode
       const text = await new Promise<string>((resolve, reject) => {
         parser.on('pdfParser_dataError', (errData: any) => reject(errData?.parserError || errData))
         parser.on('pdfParser_dataReady', (pdfData: any) => {
@@ -100,6 +100,16 @@ const CopilotRequestSchema = z.object({
     quantity: z.number().optional().nullable(),
     unit: z.string().optional().nullable()
   })).optional().default([]),
+  recentActions: z.array(z.object({
+    type: z.string(),
+    success: z.boolean(),
+    id: z.string().optional(),
+    description: z.string().optional(),
+    created_items: z.array(z.object({
+      id: z.string(),
+      description: z.string()
+    })).optional()
+  })).optional().default([]), // Recently executed actions from previous turns
   audio: z.any().optional(), // File or undefined
   fileUrls: z.array(z.string()).optional().default([]) // Storage paths for files
 })
@@ -108,7 +118,7 @@ const CopilotRequestSchema = z.object({
 const CopilotResponseSchema = z.object({
   response_text: z.string(),
   actions: z.array(z.object({
-    type: z.enum(['add_line_item', 'update_line_item', 'delete_line_item', 'add_room', 'hide_room', 'info']),
+    type: z.enum(['add_line_item', 'update_line_item', 'delete_line_item', 'add_room', 'hide_room', 'info', 'set_margin_rule', 'update_task_price', 'review_pricing']),
     data: z.record(z.any())
   }))
 })
@@ -136,12 +146,14 @@ export async function POST(req: NextRequest) {
       const messagesJson = formData.get('messages') as string
       const projectId = formData.get('projectId') as string
       const currentLineItemsJson = formData.get('currentLineItems') as string
+      const recentActionsJson = formData.get('recentActions') as string
       const fileUrlsJson = formData.get('fileUrls') as string
       
       body = {
         messages: messagesJson ? JSON.parse(messagesJson) : [],
         projectId,
         currentLineItems: currentLineItemsJson ? JSON.parse(currentLineItemsJson) : [],
+        recentActions: recentActionsJson ? JSON.parse(recentActionsJson) : [],
         audio: audioFile || undefined,
         fileUrls: fileUrlsJson ? JSON.parse(fileUrlsJson) : []
       }
@@ -158,7 +170,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const { messages, projectId, currentLineItems = [], audio, fileUrls = [] } = validation.data
+    const { messages, projectId, currentLineItems = [], audio, fileUrls = [], recentActions = [] } = validation.data
 
     // Verify project ownership
     const supabase = await createServerClient()
@@ -304,7 +316,8 @@ export async function POST(req: NextRequest) {
       .order('name', { ascending: true })
 
     // Build system prompt for the AI
-    const systemPrompt = buildSystemPrompt(currentLineItems, project, fileContext, rooms || [])
+    // Note: recentActions will be populated from previous turns by the frontend
+    const systemPrompt = buildSystemPrompt(currentLineItems, project, fileContext, rooms || [], recentActions)
 
     // Enhance user message with file context if present
     const enhancedMessages = [...messages]
@@ -799,7 +812,7 @@ async function processFiles(supabase: any, fileUrls: string[]): Promise<string> 
           console.warn(`[PDF Warning] pdf-parse failed for ${storagePath}, switching to pdf2json fallback...`, primaryErr)
 
           try {
-            const parser = new PDFParser(undefined, 1) // 1 = raw text mode
+            const parser = new PDFParser(undefined, true) // true = raw text mode
             const text = await new Promise<string>((resolve, reject) => {
               parser.on('pdfParser_dataError', (errData: any) => reject(errData?.parserError || errData))
               parser.on('pdfParser_dataReady', () => {
@@ -930,7 +943,8 @@ function buildSystemPrompt(
   currentLineItems: any[],
   project: { title: string },
   fileContext?: string,
-  existingRooms: Array<{ id: string; name: string; type: string | null; is_active: boolean }> = []
+  existingRooms: Array<{ id: string; name: string; type: string | null; is_active: boolean }> = [],
+  recentActions: Array<{ type: string; success: boolean; id?: string; description?: string; created_items?: Array<{ id: string; description: string }> }> = []
 ): string {
   const lineItemsSummary = currentLineItems.length > 0
     ? currentLineItems.map(item => 
@@ -953,16 +967,43 @@ ${fileContext}`
 ${roomsSummary}
 When adding line items, use these room names exactly as shown. If a user mentions a room that doesn't exist, create it first with add_room action.`
 
-  return `You are Estimatix Copilot, an AI assistant for construction project estimating.
+  // Build recent actions context
+  const recentActionsSection = recentActions.length > 0
+    ? `\n\nRECENTLY EXECUTED ACTIONS (from previous turns - use these IDs for corrections):
+${recentActions
+  .filter(action => action.success && (action.id || action.created_items))
+  .map(action => {
+    if (action.type === 'add_line_item' && action.created_items && action.created_items.length > 0) {
+      return action.created_items.map(item => 
+        `- Created: "${item.description}" (ID: ${item.id})`
+      ).join('\n')
+    } else if (action.id && action.description) {
+      return `- ${action.type}: "${action.description}" (ID: ${action.id})`
+    } else if (action.id) {
+      return `- ${action.type} (ID: ${action.id})`
+    }
+    return null
+  })
+  .filter(Boolean)
+  .join('\n')}
+IMPORTANT: If the user says "Actually, put that in the Kitchen" or "Move that to [Room]", use the IDs above with update_line_item.`
+    : ''
+
+  return `**YOU ARE AN AGENT, NOT A CHATBOT.** Your primary goal is to EXECUTE ACTIONS.
+If the user asks for a change, you MUST call the relevant tool (e.g., \`add_line_item\`, \`update_line_item\`).
+DO NOT just describe what you will do. CALL THE TOOL.
+If you are correcting a previous mistake (e.g. changing room), you MUST find the items you just created and use \`update_line_item\`.
+
+You are Estimatix Copilot, an AI assistant for construction project estimating.
 
 PROJECT CONTEXT:
 Project: ${project.title}
 
 CURRENT LINE ITEMS:
-${lineItemsSummary}${roomsSection}${fileContextSection}
+${lineItemsSummary}${roomsSection}${recentActionsSection}${fileContextSection}
 
 YOUR ROLE:
-You help contractors manage their project estimates by:
+You are both a Construction Estimator AND a Financial Controller. You help contractors manage their project estimates by:
 1. Answering questions about the project and estimate
 2. Adding new line items when requested (including from images and PDFs)
 3. Updating existing line items
@@ -971,6 +1012,34 @@ You help contractors manage their project estimates by:
 6. Providing helpful information and suggestions
 7. Analyzing images to identify construction work items, materials, and scope
 8. Extracting line items from PDF documents (blueprints, specs, quotes, etc.)
+9. Managing pricing and margins - setting margin rules, updating task prices, reviewing pricing health
+
+FINANCIAL CONTROLLER CAPABILITIES:
+As a Financial Controller, you can:
+- Set margin percentages for all trades or specific trades (set_margin_rule)
+- Update task prices for current estimate or future defaults (update_task_price)
+- Review pricing to identify low margins or pricing issues (review_pricing)
+
+PRICING MANAGEMENT RULES:
+1. MARGIN RULES:
+   - When user says "I want 30% margin on everything" → Use set_margin_rule with scope: "all", margin_percent: 30
+   - When user says "Plumbing should have 25% margin" → Use set_margin_rule with scope: "trade:404", margin_percent: 25
+   - Margin rules apply to future line items and can override default margins
+
+2. TASK PRICE UPDATES:
+   - When user says "Drywall is costing me $3/sqft now" → Use update_task_price with scope: "future_default" to save for future estimates
+   - When user says "Update all paint items to $2.50/sqft" → Use update_task_price with scope: "this_estimate" to update current items only
+   - "future_default" saves to user_cost_library as a manual override (source='manual_override')
+   - "this_estimate" updates only the current line items in this project
+
+3. PRICING REVIEW:
+   - When user asks "Review pricing", "Check margins", or "What items are too cheap?" → Use review_pricing
+   - This identifies items with low margins (<15%) or large variance from seed data
+
+4. ACTUALS AS GOLD STANDARD:
+   - Actual costs from completed jobs (saved via Close Job workflow) are the gold standard for pricing
+   - The pricing engine prioritizes: Manual → History (actuals) → Seed (task library) → AI
+   - When actuals exist, they automatically override seed data for future estimates
 
 ROOM MANAGEMENT (CRITICAL):
 - ALWAYS group line items into rooms whenever possible. Rooms help organize estimates by location.
@@ -1253,6 +1322,7 @@ ACTION TYPES:
        "notes": "Optional notes"
      }
    }
+   IMPORTANT: After calling add_line_item, the system will return the created item's ID. Save this ID so you can reference it in update_line_item if the user corrects you.
    
    PRICING RULES:
    - If the user provides a specific price/cost/allowance: Include "unitCost" with the exact amount and set "pricing_source" to "manual"
@@ -1269,16 +1339,21 @@ ACTION TYPES:
    {
      "type": "update_line_item",
      "data": {
-       "line_item_id": "UUID of existing line item",
+       "line_item_id": "UUID of existing line item (REQUIRED - use the id from add_line_item response)",
        "description": "Updated description" (optional),
        "category": "Updated category" (optional),
        "cost_code": "Updated cost code" (optional),
-       "room": "Updated room" (optional),
+       "room": "Updated room name" (optional - if provided, will create room if it doesn't exist),
+       "room_name": "Updated room name" (optional - same as room),
        "quantity": number (optional),
        "unit": "Updated unit" (optional),
        "notes": "Updated notes" (optional)
      }
    }
+   CRITICAL: When the user says "Actually, put that in the Kitchen" or "Move that to [Room]", you MUST:
+   - Find the line_item_id of the item(s) you just created (from the add_line_item response)
+   - Use update_line_item with the line_item_id and the new room_name
+   - If the room doesn't exist, it will be created automatically
 
 3. "delete_line_item":
    {
@@ -1317,6 +1392,48 @@ ACTION TYPES:
        "message": "Information message for the user"
      }
    }
+
+7. "set_margin_rule":
+   {
+     "type": "set_margin_rule",
+     "data": {
+       "scope": "string - 'all' for all trades, or 'trade:404' for specific trade (use cost code)",
+       "margin_percent": number (0-100, e.g., 30 for 30% margin)
+     }
+   }
+   Use this when the user wants to set a margin percentage for all trades or a specific trade.
+   Examples:
+   - "I want 30% margin on everything" → scope: "all", margin_percent: 30
+   - "Plumbing should have 25% margin" → scope: "trade:404", margin_percent: 25
+   - "Electrical is too cheap, raise margin to 35%" → scope: "trade:405", margin_percent: 35
+
+8. "update_task_price":
+   {
+     "type": "update_task_price",
+     "data": {
+       "task_name_or_code": "string - description or cost code (e.g., 'Drywall', '520', 'Paint')",
+       "new_unit_price": number (the new unit cost),
+       "scope": "this_estimate" | "future_default"
+     }
+   }
+   Use this when the user wants to update pricing for a specific task.
+   - "this_estimate": Update only the current line items in this estimate
+   - "future_default": Save as a manual override for future estimates (saved to user_cost_library)
+   Examples:
+   - "Drywall is costing me $3/sqft now" → task_name_or_code: "Drywall", new_unit_price: 3, scope: "future_default"
+   - "Update all paint items to $2.50/sqft" → task_name_or_code: "Paint", new_unit_price: 2.5, scope: "this_estimate"
+   - "Windows should be $500 each going forward" → task_name_or_code: "520", new_unit_price: 500, scope: "future_default"
+
+9. "review_pricing":
+   {
+     "type": "review_pricing",
+     "data": {}
+   }
+   Use this when the user asks to review pricing, check margins, or identify pricing issues.
+   This will return a list of items with:
+   - Low margins (<15%)
+   - Large variance from seed/task library data
+   - Items that may need price adjustments
 
 ADDITIONAL RULES:
 - Only create actions when the user explicitly requests changes OR when analyzing files (images/PDFs)
@@ -1475,11 +1592,14 @@ async function executeActions(
   projectId: string,
   userId: string,
   supabase: any
-): Promise<Array<{ type: string; success: boolean; id?: string; error?: string }>> {
+): Promise<Array<{ type: string; success: boolean; id?: string; error?: string; description?: string; created_items?: Array<{ id: string; description: string }> }>> {
   const results = []
 
   for (const action of actions) {
     try {
+      // Debug logging
+      console.log('[Copilot] Executing action:', action.type)
+      console.log('[Copilot] Action data:', JSON.stringify(action.data, null, 2))
       switch (action.type) {
         case 'add_line_item': {
           const { data } = action
@@ -1522,6 +1642,8 @@ async function executeActions(
               is_allowance: true
             }
           } else {
+            // Apply pricing using the new learning pricing engine
+            // Pass task_library_id if available from enrichment
             pricedItem = await applyPricing({
               description: data.description || '',
               category: data.category || 'Other',
@@ -1531,66 +1653,32 @@ async function executeActions(
               unit: data.unit || null,
               unitCost: data.unitCost,
               pricing_source: data.pricing_source || 'ai',
+              task_library_id: data.task_library_id || null,
               notes: data.notes,
               is_allowance: false
             }, userId)
           }
           
-          // Use pricing from the service, but also check for task library pricing data
-          // that might have been enriched by enrichActionsWithPricing
-          // IMPORTANT: Do NOT override manual pricing - if pricing_source is 'manual', use the service result
+          // Use pricing directly from the pricing service
+          // The pricing service now handles all waterfall logic (Manual -> History -> Seed)
+          // and applies margins from user_margin_rules
           let laborCost: number | null = pricedItem.labor_cost || null
           let materialCost: number | null = pricedItem.material_cost || null
           let directCost: number | null = pricedItem.direct_cost || null
+          let marginPercent: number | null = pricedItem.margin_percent || null
+          let clientPrice: number | null = pricedItem.client_price || null
           
-          // If enrichActionsWithPricing found task library pricing with breakdown,
-          // use that instead (it's more detailed) - but only if NOT manual pricing
-          if (pricedItem.pricing_source !== 'manual' && data.pricing_source === 'task_library' && data.unit_cost_mid !== undefined) {
-            const quantity = data.quantity || 1
-            
-            // Calculate labor cost from labor hours if available
-            if (data.labor_hours_per_unit !== null && data.labor_hours_per_unit !== undefined) {
-              // Assume $50/hour labor rate (this could be configurable per user)
-              const laborRatePerHour = 50
-              laborCost = data.labor_hours_per_unit * laborRatePerHour * quantity
-            }
-            
-            // Calculate material cost
-            if (data.material_cost_per_unit !== null && data.material_cost_per_unit !== undefined) {
-              materialCost = data.material_cost_per_unit * quantity
-            }
-            
-            // Use unit_cost_mid as direct cost if available and we don't have breakdown
-            if (data.unit_cost_mid !== null && data.unit_cost_mid !== undefined) {
-              const unitCostTotal = data.unit_cost_mid * quantity
-              if (!laborCost && !materialCost) {
-                directCost = unitCostTotal
-              } else {
-                directCost = (laborCost || 0) + (materialCost || 0)
-              }
-            } else if (laborCost || materialCost) {
-              directCost = (laborCost || 0) + (materialCost || 0)
-            }
+          // If pricing service didn't calculate client_price, calculate it now
+          if (!clientPrice && directCost && marginPercent !== null) {
+            clientPrice = directCost * (1 + marginPercent / 100)
           }
           
-          // Calculate margin and client_price (isAllowance already determined above)
-          let marginPercent: number | null = null
-          let clientPrice: number | null = null
-          
-          if (isAllowance) {
-            // Allowances: margin = 0, client_price = direct_cost (already set in pricedItem above)
-            marginPercent = 0
-            clientPrice = pricedItem.client_price || pricedItem.direct_cost || 0
-            directCost = pricedItem.direct_cost || 0
-            laborCost = 0
-            materialCost = 0
-          } else {
-            // Normal items: calculate margin and client_price
-            const defaultMargin = 30 // Default margin percentage
-            marginPercent = defaultMargin
-            if (directCost && !isNaN(directCost)) {
-              clientPrice = directCost * (1 + marginPercent / 100)
-            }
+          // Ensure margin and client_price are set (pricing service should have set these)
+          if (marginPercent === null) {
+            marginPercent = 30 // Fallback default
+          }
+          if (!clientPrice && directCost) {
+            clientPrice = directCost * (1 + marginPercent / 100)
           }
           
           // Validate cost_code one more time before inserting (safety check)
@@ -1616,6 +1704,8 @@ async function executeActions(
             client_price: clientPrice,
             is_allowance: isAllowance,
             pricing_source: pricedItem.pricing_source || 'ai',
+            price_source: pricedItem.pricing_source || 'ai', // Map pricing_source to price_source
+            task_library_id: pricedItem.task_library_id || data.task_library_id || null,
             confidence: pricedItem.confidence || data.confidence || null,
             is_active: true
           }
@@ -1628,11 +1718,19 @@ async function executeActions(
           const { data: newItem, error } = await supabase
             .from('estimate_line_items')
             .insert(insertData)
-            .select('id')
+            .select('id, description')
             .single()
 
           if (error) throw error
-          results.push({ type: 'add_line_item', success: true, id: newItem.id })
+          
+          // Return the created item with ID and description so AI can reference it
+          results.push({ 
+            type: 'add_line_item', 
+            success: true, 
+            id: newItem.id,
+            description: newItem.description || insertData.description,
+            created_items: [{ id: newItem.id, description: newItem.description || insertData.description }]
+          })
           break
         }
 
@@ -1650,15 +1748,19 @@ async function executeActions(
             // Validate cost code before updating
             updateData.cost_code = await validateAndNormalizeCostCode(data.cost_code, supabase)
           }
+          
+          let updatedRoomName: string | null = null
           if (data.room !== undefined || data.room_name !== undefined) {
             const roomName = data.room_name || data.room
+            updatedRoomName = roomName
             updateData.room_name = roomName
-            // Resolve room_name to room_id
+            // Resolve room_name to room_id (this will create the room if it doesn't exist)
             const roomId = await resolveRoomName(roomName, projectId, supabase)
             if (roomId) {
               updateData.room_id = roomId
             }
           }
+          
           if (data.quantity !== undefined) updateData.quantity = data.quantity
           if (data.unit !== undefined) updateData.unit = data.unit
           if (data.notes !== undefined) updateData.notes = data.notes
@@ -1676,7 +1778,16 @@ async function executeActions(
               throw error
             }
           } else {
-            results.push({ type: 'update_line_item', success: true, id: data.line_item_id })
+            // Return success message with room name if room was updated
+            const successMessage = updatedRoomName 
+              ? `Moved item to ${updatedRoomName}.`
+              : 'Item updated successfully.'
+            results.push({ 
+              type: 'update_line_item', 
+              success: true, 
+              id: data.line_item_id,
+              message: successMessage
+            })
           }
           break
         }
@@ -1799,6 +1910,224 @@ async function executeActions(
         case 'info': {
           // Info actions don't modify the database
           results.push({ type: 'info', success: true })
+          break
+        }
+
+        case 'set_margin_rule': {
+          const { data } = action
+          if (!data.scope || data.margin_percent === undefined) {
+            results.push({ type: 'set_margin_rule', success: false, error: 'Missing scope or margin_percent' })
+            break
+          }
+
+          // Validate margin_percent is between 0 and 100
+          const marginPercent = Number(data.margin_percent)
+          if (isNaN(marginPercent) || marginPercent < 0 || marginPercent > 100) {
+            results.push({ type: 'set_margin_rule', success: false, error: 'margin_percent must be between 0 and 100' })
+            break
+          }
+
+          // Upsert into user_margin_rules
+          const { error } = await supabase
+            .from('user_margin_rules')
+            .upsert({
+              user_id: userId,
+              scope: data.scope,
+              margin_percent: marginPercent
+            }, {
+              onConflict: 'user_id,scope'
+            })
+
+          if (error) {
+            console.error('Error setting margin rule:', error)
+            results.push({ type: 'set_margin_rule', success: false, error: error.message })
+          } else {
+            results.push({ type: 'set_margin_rule', success: true })
+          }
+          break
+        }
+
+        case 'update_task_price': {
+          const { data } = action
+          if (!data.task_name_or_code || data.new_unit_price === undefined || !data.scope) {
+            results.push({ type: 'update_task_price', success: false, error: 'Missing task_name_or_code, new_unit_price, or scope' })
+            break
+          }
+
+          const newUnitPrice = Number(data.new_unit_price)
+          if (isNaN(newUnitPrice) || newUnitPrice < 0) {
+            results.push({ type: 'update_task_price', success: false, error: 'new_unit_price must be a positive number' })
+            break
+          }
+
+          if (data.scope === 'this_estimate') {
+            // Update current line items in this estimate
+            // Match by description (fuzzy) or cost_code
+            const { data: lineItems, error: fetchError } = await supabase
+              .from('estimate_line_items')
+              .select('id, description, cost_code, quantity, unit')
+              .eq('project_id', projectId)
+              .eq('is_active', true)
+
+            if (fetchError) {
+              results.push({ type: 'update_task_price', success: false, error: 'Failed to fetch line items' })
+              break
+            }
+
+            // Match items by cost_code or description
+            const taskCode = data.task_name_or_code
+            const matchingItems = lineItems?.filter((item: { id: string; description: string | null; cost_code: string | null; quantity: number | null; unit: string | null }) => {
+              // Check if it's a cost code match
+              if (item.cost_code === taskCode) return true
+              // Check if description contains the task name (case-insensitive)
+              const descLower = (item.description || '').toLowerCase()
+              const taskLower = taskCode.toLowerCase()
+              return descLower.includes(taskLower) || taskLower.includes(descLower)
+            }) || []
+
+            if (matchingItems.length === 0) {
+              results.push({ type: 'update_task_price', success: false, error: `No matching line items found for "${taskCode}"` })
+              break
+            }
+
+            // Update each matching item
+            let updatedCount = 0
+            for (const item of matchingItems) {
+              const quantity = Number(item.quantity) || 1
+              const newDirectCost = newUnitPrice * quantity
+              // Get current margin from item or use default
+              const { data: itemData } = await supabase
+                .from('estimate_line_items')
+                .select('margin_percent')
+                .eq('id', item.id)
+                .single()
+              
+              const currentMargin = Number(itemData?.margin_percent) || 30
+              const newClientPrice = newDirectCost * (1 + currentMargin / 100)
+
+              const { error: updateError } = await supabase
+                .from('estimate_line_items')
+                .update({
+                  direct_cost: newDirectCost,
+                  client_price: newClientPrice,
+                  price_source: 'manual'
+                })
+                .eq('id', item.id)
+
+              if (!updateError) {
+                updatedCount++
+              }
+            }
+
+            results.push({ 
+              type: 'update_task_price', 
+              success: true,
+              updated_count: updatedCount
+            })
+          } else if (data.scope === 'future_default') {
+            // Save to user_cost_library as manual override
+            // Try to find task_library_id by matching description or cost_code
+            let taskLibraryId: string | null = null
+
+            // Try to find by cost_code first
+            if (data.task_name_or_code.match(/^\d+$/)) {
+              const { data: taskLib } = await supabase
+                .from('task_library')
+                .select('id')
+                .eq('cost_code', data.task_name_or_code)
+                .limit(1)
+                .maybeSingle()
+              
+              if (taskLib) {
+                taskLibraryId = taskLib.id
+              }
+            }
+
+            // Insert into user_cost_library
+            const { error: insertError } = await supabase
+              .from('user_cost_library')
+              .insert({
+                user_id: userId,
+                task_library_id: taskLibraryId,
+                unit_cost: newUnitPrice,
+                is_actual: false,
+                source: 'manual_override',
+                cost_code: data.task_name_or_code.match(/^\d+$/) ? data.task_name_or_code : null,
+                description: data.task_name_or_code.match(/^\d+$/) ? null : data.task_name_or_code
+              })
+
+            if (insertError) {
+              console.error('Error saving task price override:', insertError)
+              results.push({ type: 'update_task_price', success: false, error: insertError.message })
+            } else {
+              results.push({ type: 'update_task_price', success: true })
+            }
+          } else {
+            results.push({ type: 'update_task_price', success: false, error: 'Invalid scope. Must be "this_estimate" or "future_default"' })
+          }
+          break
+        }
+
+        case 'review_pricing': {
+          // Fetch all line items for this project
+          const { data: lineItems, error: fetchError } = await supabase
+            .from('estimate_line_items')
+            .select('id, description, cost_code, direct_cost, client_price, margin_percent, price_source, quantity, unit')
+            .eq('project_id', projectId)
+            .eq('is_active', true)
+
+          if (fetchError) {
+            results.push({ type: 'review_pricing', success: false, error: 'Failed to fetch line items' })
+            break
+          }
+
+          // Identify issues
+          const issues: Array<{
+            id: string
+            description: string
+            cost_code: string | null
+            issue: string
+            margin_percent: number | null
+            price_source: string | null
+          }> = []
+
+          for (const item of lineItems || []) {
+            const margin = Number(item.margin_percent) || 0
+            const directCost = Number(item.direct_cost) || 0
+
+            // Check for low margins
+            if (margin < 15 && directCost > 0) {
+              issues.push({
+                id: item.id,
+                description: item.description || 'Untitled',
+                cost_code: item.cost_code,
+                issue: `Low margin: ${margin.toFixed(1)}% (recommended: 15%+)`,
+                margin_percent: margin,
+                price_source: item.price_source
+              })
+            }
+
+            // Check for AI-generated pricing (may need review)
+            if (item.price_source === 'ai' && directCost > 0) {
+              issues.push({
+                id: item.id,
+                description: item.description || 'Untitled',
+                cost_code: item.cost_code,
+                issue: 'AI-generated pricing - consider verifying against actual costs',
+                margin_percent: margin,
+                price_source: item.price_source
+              })
+            }
+          }
+
+          // Store results in action result (will be included in response)
+          results.push({ 
+            type: 'review_pricing', 
+            success: true,
+            issues: issues,
+            total_items: lineItems?.length || 0,
+            items_with_issues: issues.length
+          })
           break
         }
 

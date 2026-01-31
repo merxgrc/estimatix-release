@@ -171,3 +171,6 @@ CREATE TRIGGER update_rooms_updated_at
 COMMENT ON TABLE public.rooms IS 'Structured room definitions for projects. Migrated from room_name text field in estimate_line_items.';
 COMMENT ON COLUMN public.rooms.source IS 'Origin of room: manual (user-created), migration (from room_name backfill), ai (AI-detected), etc.';
 
+
+
+

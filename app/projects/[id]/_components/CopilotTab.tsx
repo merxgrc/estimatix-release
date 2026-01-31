@@ -71,7 +71,7 @@ export function CopilotTab({
     loadLineItems()
   }, [activeEstimateId])
 
-  const handleSendMessage = async (content: string, fileUrls?: string[]) => {
+  const handleSendMessage = async (content: string, fileUrls?: string[]): Promise<{ response_text: string; actions?: any[] } | undefined> => {
     try {
       // Call the copilot API
       const response = await parseEstimateRequest({
@@ -96,6 +96,7 @@ export function CopilotTab({
 
       // The CopilotChat component will handle displaying the response
       // by loading messages from the database
+      return undefined
     } catch (error) {
       console.error('Error sending message to copilot:', error)
       toast.error(error instanceof Error ? error.message : 'Failed to send message to copilot')

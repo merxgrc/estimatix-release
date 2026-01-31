@@ -43,7 +43,7 @@ export async function POST(
     // Load the line item with estimate and project info
     const { data: lineItem, error: lineItemError } = await supabase
       .from('estimate_line_items')
-      .select('*, estimates!inner(project_id, projects!inner(user_id))')
+      .select('*, estimates!inner(project_id, status, projects!inner(user_id))')
       .eq('id', lineItemId)
       .single()
 
@@ -67,6 +67,19 @@ export async function POST(
     if (!project || project.user_id !== user.id) {
       return NextResponse.json(
         { error: 'Unauthorized' },
+        { status: 403 }
+      )
+    }
+
+    // =============================================================================
+    // EDIT LOCK: Estimates can only be modified when status='draft'
+    // =============================================================================
+    if (estimate.status !== 'draft') {
+      const statusLabel = estimate.status === 'bid_final' ? 'Bid Finalized' :
+                         estimate.status === 'contract_signed' ? 'Contract Signed' :
+                         estimate.status === 'completed' ? 'Completed' : 'Locked'
+      return NextResponse.json(
+        { error: `Cannot modify estimate: ${statusLabel}. Estimates can only be edited while in draft status.` },
         { status: 403 }
       )
     }

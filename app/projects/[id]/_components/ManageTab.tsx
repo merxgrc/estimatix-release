@@ -10,9 +10,11 @@ import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { supabase } from "@/lib/supabase/client"
 import { toast } from 'sonner'
-import type { Project } from "@/types/db"
-import { ListChecks, FileText, Plus, Play, Download } from "lucide-react"
+import type { Project, EstimateStatus } from "@/types/db"
+import { ListChecks, FileText, Plus, Play, Download, CheckCircle2 } from "lucide-react"
 import { CreateInvoiceDrawer } from '@/components/invoices/CreateInvoiceDrawer'
+import { CloseOutProjectDialog } from '@/components/projects/CloseOutProjectDialog'
+import { EstimateVsActualSummary } from '@/components/projects/EstimateVsActualSummary'
 import { startJobFromEstimate } from '@/actions/start-job'
 
 interface ProjectTask {
@@ -41,8 +43,11 @@ export function ManageTab({ project }: { project: Project }) {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
   const [createInvoiceOpen, setCreateInvoiceOpen] = useState(false)
+  const [closeOutOpen, setCloseOutOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('scope')
   const [startingJob, setStartingJob] = useState(false)
+  const [estimateId, setEstimateId] = useState<string | null>(null)
+  const [estimateStatus, setEstimateStatus] = useState<EstimateStatus | null>(null)
 
   // Fetch project tasks from Supabase
   const fetchTasks = useCallback(async () => {
@@ -101,13 +106,34 @@ export function ManageTab({ project }: { project: Project }) {
     }
   }, [project.id])
 
+  // Fetch estimate info for close out
+  const fetchEstimate = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('estimates')
+        .select('id, status')
+        .eq('project_id', project.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (!error && data) {
+        setEstimateId(data.id)
+        setEstimateStatus(data.status as EstimateStatus)
+      }
+    } catch (error) {
+      console.error('Error fetching estimate:', error)
+    }
+  }, [project.id])
+
   // Fetch data on mount and when project.id changes
   useEffect(() => {
     if (project.id) {
       fetchTasks()
       fetchInvoices()
+      fetchEstimate()
     }
-  }, [project.id, fetchTasks, fetchInvoices])
+  }, [project.id, fetchTasks, fetchInvoices, fetchEstimate])
 
   const handleStartJob = async () => {
     try {
@@ -200,6 +226,14 @@ export function ManageTab({ project }: { project: Project }) {
         </TabsList>
 
         <TabsContent value="scope" className="space-y-4">
+          {/* Estimate vs Actual Summary - Show when project is completed */}
+          {estimateStatus === 'completed' && estimateId && (
+            <EstimateVsActualSummary 
+              projectId={project.id} 
+              estimateId={estimateId} 
+            />
+          )}
+          
           {loading ? (
             <Card><CardContent className="py-12 text-center">Loading...</CardContent></Card>
           ) : totalTasks === 0 ? (
@@ -221,8 +255,24 @@ export function ManageTab({ project }: { project: Project }) {
             <>
               {/* Progress Bar */}
               <Card>
-                <CardHeader>
+                <CardHeader className="flex flex-row items-center justify-between">
                   <CardTitle>Project Progress</CardTitle>
+                  {/* Close Out Button - Show when estimate is contract_signed */}
+                  {estimateStatus === 'contract_signed' && estimateId && (
+                    <Button 
+                      onClick={() => setCloseOutOpen(true)}
+                      variant="outline"
+                      className="gap-2"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      Close Out Project
+                    </Button>
+                  )}
+                  {estimateStatus === 'completed' && (
+                    <Badge variant="secondary" className="bg-green-100 text-green-800">
+                      Project Completed
+                    </Badge>
+                  )}
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2">
@@ -407,6 +457,21 @@ export function ManageTab({ project }: { project: Project }) {
           />
         </TabsContent>
       </Tabs>
+
+      {/* Close Out Project Dialog */}
+      {estimateId && (
+        <CloseOutProjectDialog
+          open={closeOutOpen}
+          onOpenChange={setCloseOutOpen}
+          projectId={project.id}
+          estimateId={estimateId}
+          projectName={project.title}
+          onSuccess={() => {
+            fetchEstimate()
+            toast.success('Project closed out successfully!')
+          }}
+        />
+      )}
     </div>
   )
 }

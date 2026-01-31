@@ -11,6 +11,8 @@ import { supabase } from "@/lib/supabase/client"
 import { createProposalFromEstimate } from '@/actions/proposals'
 import { Loader2, AlertCircle, DollarSign } from "lucide-react"
 import { toast } from 'sonner'
+import { recordPricingCommit, type LineItemForCommit } from '@/hooks/usePricingFeedback'
+import { useAuth } from "@/lib/auth-context"
 
 interface CreateProposalDialogProps {
   open: boolean
@@ -34,6 +36,7 @@ export function CreateProposalDialog({
   estimateId,
   onProposalCreated
 }: CreateProposalDialogProps) {
+  const { user } = useAuth()
   const [title, setTitle] = useState('Construction Proposal')
   // Pre-filled template for Basis of Proposal
   const [basisOfProposal, setBasisOfProposal] = useState(
@@ -47,6 +50,24 @@ export function CreateProposalDialog({
   const [totalPrice, setTotalPrice] = useState<number | null>(null)
   const [totalAllowances, setTotalAllowances] = useState<number | null>(null)
   const [isLoadingSummary, setIsLoadingSummary] = useState(true)
+  const [userRegion, setUserRegion] = useState<string | null>(null)
+  
+  // Fetch user's region for pricing events
+  useEffect(() => {
+    const fetchUserRegion = async () => {
+      if (!user?.id) return
+      
+      const { data } = await supabase
+        .from('user_profile_settings')
+        .select('region')
+        .eq('user_id', user.id)
+        .maybeSingle()
+      
+      setUserRegion(data?.region || null)
+    }
+    
+    fetchUserRegion()
+  }, [user?.id])
 
   // Load estimate summary when dialog opens or estimate changes
   useEffect(() => {
@@ -146,6 +167,73 @@ export function CreateProposalDialog({
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to create proposal')
+      }
+
+      // =========================================================================
+      // PHASE 1 DATA DISCIPLINE: PRICING TRUTH RULES
+      // =========================================================================
+      // Per PRODUCT_CONTEXT.md:
+      // - pricing_events can be logged at proposal creation (weaker signal)
+      // - user_cost_library should ONLY be seeded from TRUTH states:
+      //   * bid_final: contractor committed to these prices
+      //   * contract_signed: client accepted these prices
+      // - Draft proposals are NOT truth — contractor is still experimenting
+      //
+      // Why this matters:
+      // - Draft prices are exploratory, not decisions
+      // - Seeding library from drafts would capture noise, not signal
+      // - Future suggestions must be based on committed prices only
+      // =========================================================================
+      
+      try {
+        // First, check estimate status to determine if we should seed library
+        const { data: estimate } = await supabase
+          .from('estimates')
+          .select('status')
+          .eq('id', estimateId)
+          .single()
+        
+        const estimateStatus = estimate?.status
+        const isTruthState = estimateStatus === 'bid_final' || estimateStatus === 'contract_signed'
+        
+        // Fetch line items for pricing event logging
+        const { data: lineItems } = await supabase
+          .from('estimate_line_items')
+          .select('id, description, cost_code, unit, quantity, direct_cost, pricing_source, task_library_id, confidence')
+          .eq('estimate_id', estimateId)
+        
+        if (lineItems && lineItems.length > 0) {
+          const lineItemsForCommit: LineItemForCommit[] = lineItems.map(item => ({
+            id: item.id,
+            description: item.description || '',
+            costCode: item.cost_code,
+            unit: item.unit,
+            quantity: item.quantity,
+            directCost: item.direct_cost,
+            pricingSource: item.pricing_source as any,
+            matchedTaskId: item.task_library_id,
+            matchConfidence: item.confidence
+          }))
+          
+          // Fire-and-forget: don't block proposal creation
+          // Include region for consistent pricing capture
+          recordPricingCommit(lineItemsForCommit, {
+            projectId,
+            estimateId,
+            region: userRegion, // User's region from profile settings
+            stage: 'proposal_created',
+            // CRITICAL: Only save to library if estimate is in a truth state
+            // Draft proposals should NOT seed user_cost_library
+            saveToLibrary: isTruthState
+          }).catch(err => console.warn('Failed to record pricing commit:', err))
+          
+          if (!isTruthState) {
+            console.log(`[CreateProposal] Estimate ${estimateId} is in '${estimateStatus}' state — pricing_events logged but user_cost_library NOT seeded`)
+          }
+        }
+      } catch (pricingError) {
+        // Don't fail proposal creation if pricing logging fails
+        console.warn('Failed to record pricing events:', pricingError)
       }
 
       toast.success('Proposal created successfully!')

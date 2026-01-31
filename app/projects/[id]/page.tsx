@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { Sidebar } from "@/components/sidebar"
 import { Button } from "@/components/ui/button"
@@ -22,12 +22,13 @@ import { ProposalsTab } from "./_components/ProposalsTab"
 import { ContractsTab } from "./_components/ContractsTab"
 import { ManageTab } from "./_components/ManageTab"
 import type { Project, Estimate, Upload, Profile } from "@/types/db"
-import { ArrowLeft, Trash2, MessageSquare, Download, FileDown } from "lucide-react"
+import { ArrowLeft, Trash2, MessageSquare, Download, FileDown, FileText } from "lucide-react"
 import { toast } from 'sonner'
 import { supabase } from "@/lib/supabase/client"
 import { useSidebar } from "@/lib/sidebar-context"
 import { CopilotChat } from "@/components/copilot/CopilotChat"
 import { Drawer, DrawerContent } from "@/components/ui/sheet"
+import { CloseJobModal } from "@/components/projects/CloseJobModal"
 
 export default function ProjectDetailPage() {
   const router = useRouter()
@@ -36,6 +37,25 @@ export default function ProjectDetailPage() {
   const { user } = useAuth()
   const { sidebarWidth, isCollapsed } = useSidebar()
   const projectId = params.id as string
+
+  // Validate that projectId is a valid UUID (not "new" or other invalid values)
+  useEffect(() => {
+    // Check if projectId is "new" - redirect to the new project page
+    if (projectId === 'new') {
+      router.push('/projects/new')
+      return
+    }
+
+    // Basic UUID validation (UUIDs are 36 characters with dashes)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (projectId && !uuidRegex.test(projectId)) {
+      console.error('Invalid project ID format:', projectId)
+      setError('Invalid project ID')
+      setIsLoading(false)
+      router.push('/projects')
+      return
+    }
+  }, [projectId, router])
 
   const [project, setProject] = useState<Project | null>(null)
   const [estimates, setEstimates] = useState<Estimate[]>([])
@@ -51,6 +71,14 @@ export default function ProjectDetailPage() {
   const [activeTab, setActiveTab] = useState("summary")
   const [isCopilotOpen, setIsCopilotOpen] = useState(false)
   const [isExportingPdf, setIsExportingPdf] = useState(false)
+  const [isCloseJobModalOpen, setIsCloseJobModalOpen] = useState(false)
+  const [recentActions, setRecentActions] = useState<any[]>([])
+  const recentActionsRef = useRef<any[]>([])
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    recentActionsRef.current = recentActions
+  }, [recentActions])
 
   // Handle URL query params for tab and roomId
   useEffect(() => {
@@ -611,6 +639,9 @@ export default function ProjectDetailPage() {
 
   const handleSendMessage = async (content: string, fileUrls?: string[]) => {
     try {
+      // Safely get recentActions - use ref to avoid closure issues
+      const actionsToSend = recentActionsRef.current || []
+      
       // Get current line items from active estimate for context
       let currentLineItems: any[] = []
       if (activeEstimate) {
@@ -650,6 +681,7 @@ export default function ProjectDetailPage() {
         formData.append('messages', JSON.stringify(messages))
         formData.append('projectId', projectId)
         formData.append('currentLineItems', JSON.stringify(currentLineItems))
+        formData.append('recentActions', JSON.stringify(actionsToSend))
         formData.append('fileUrls', JSON.stringify(fileUrls))
         body = formData
         headers = {}
@@ -658,6 +690,7 @@ export default function ProjectDetailPage() {
           messages,
           projectId,
           currentLineItems,
+          recentActions: actionsToSend, // Pass recent actions for context
           fileUrls: []
         })
         headers = {
@@ -735,6 +768,15 @@ export default function ProjectDetailPage() {
       setEstimates(updatedEstimates)
       
       console.log('Copilot response:', result)
+      
+      // Update recentActions with executed actions from this turn (for next turn context)
+      if (result.executedActions && Array.isArray(result.executedActions)) {
+        setRecentActions(prev => {
+          // Keep only the last 5 actions to avoid context bloat
+          const newActions = [...prev, ...result.executedActions]
+          return newActions.slice(-5)
+        })
+      }
       
       // Return the result so the component can immediately update UI
       return result
@@ -875,6 +917,16 @@ export default function ProjectDetailPage() {
                     </>
                   )}
                 </Button>
+                {project?.status === 'active' && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => setIsCloseJobModalOpen(true)}
+                  >
+                    <FileText className="mr-2 h-4 w-4" />
+                    Mark Job Complete
+                  </Button>
+                )}
                 <Button
                   variant="destructive"
                   size="sm"
@@ -944,6 +996,7 @@ export default function ProjectDetailPage() {
                   onSave={handleEstimateSave}
                   onRecordingComplete={handleRecordingComplete}
                   isParsing={isParsing}
+                  onEstimateStatusChange={fetchEstimates}
                 />
               </TabsContent>
 
@@ -1042,6 +1095,17 @@ export default function ProjectDetailPage() {
           <MessageSquare className="h-6 w-6" />
           <span className="sr-only">Open Copilot</span>
         </Button>
+
+        {/* Close Job Modal */}
+        <CloseJobModal
+          projectId={projectId}
+          open={isCloseJobModalOpen}
+          onOpenChange={setIsCloseJobModalOpen}
+          onSuccess={() => {
+            // Refresh project data after closing
+            refreshProjectData()
+          }}
+        />
       </div>
     </AuthGuard>
   )

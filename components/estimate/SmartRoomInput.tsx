@@ -12,6 +12,7 @@ interface SmartRoomInputProps {
   placeholder?: string
   className?: string
   options?: string[]
+  disabled?: boolean
 }
 
 const DEFAULT_ROOM_OPTIONS = [
@@ -121,7 +122,8 @@ export function SmartRoomInput({
   onBlur,
   placeholder = "Select or type room name",
   className,
-  options = DEFAULT_ROOM_OPTIONS
+  options = DEFAULT_ROOM_OPTIONS,
+  disabled = false
 }: SmartRoomInputProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [inputValue, setInputValue] = useState(value || '')
@@ -198,7 +200,9 @@ export function SmartRoomInput({
 
   // Handle input focus
   const handleFocus = () => {
-    setIsOpen(true)
+    if (!disabled) {
+      setIsOpen(true)
+    }
   }
 
   // Handle input blur
@@ -280,6 +284,7 @@ export function SmartRoomInput({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           className="h-7 w-full pr-8 text-xs"
+          disabled={disabled}
         />
         <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
           <ChevronDown className={cn(
@@ -290,7 +295,7 @@ export function SmartRoomInput({
       </div>
 
       {/* Dropdown list - always show all predefined options */}
-      {isOpen && (
+      {isOpen && !disabled && (
         <ul
           ref={listRef}
           className="absolute z-50 w-full mt-1 max-h-60 overflow-auto rounded-md border bg-popover text-popover-foreground shadow-md"

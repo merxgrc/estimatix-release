@@ -10,16 +10,21 @@ const DEFAULT_WIDTH = 256
 interface SidebarContextType {
   sidebarWidth: number
   isCollapsed: boolean
+  isCopilotOpen: boolean
+  setIsCopilotOpen: (open: boolean) => void
 }
 
 const SidebarContext = createContext<SidebarContextType>({
   sidebarWidth: DEFAULT_WIDTH,
   isCollapsed: false,
+  isCopilotOpen: false,
+  setIsCopilotOpen: () => {},
 })
 
 export function SidebarProvider({ children }: { children: ReactNode }) {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH)
   const [isCollapsed, setIsCollapsed] = useState(false)
+  const [isCopilotOpen, setIsCopilotOpen] = useState(false)
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -73,7 +78,7 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <SidebarContext.Provider value={{ sidebarWidth, isCollapsed }}>
+    <SidebarContext.Provider value={{ sidebarWidth, isCollapsed, isCopilotOpen, setIsCopilotOpen }}>
       {children}
     </SidebarContext.Provider>
   )
