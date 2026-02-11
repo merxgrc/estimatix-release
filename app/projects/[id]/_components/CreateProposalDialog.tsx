@@ -70,6 +70,7 @@ export function CreateProposalDialog({
   }, [user?.id])
 
   // Load estimate summary when dialog opens or estimate changes
+  // Only include items from ACTIVE/INCLUDED rooms (is_active = true)
   useEffect(() => {
     const loadEstimateSummary = async () => {
       if (!open || !estimateId) {
@@ -80,10 +81,21 @@ export function CreateProposalDialog({
       try {
         setIsLoadingSummary(true)
         
-        // Fetch all line items for the estimate
+        // Fetch all line items for the estimate with room info
+        // Join with rooms to filter out excluded rooms (is_active = false)
         const { data: lineItems, error: fetchError } = await supabase
           .from('estimate_line_items')
-          .select('client_price, is_allowance, direct_cost, description')
+          .select(`
+            client_price, 
+            is_allowance, 
+            direct_cost, 
+            description,
+            room_id,
+            rooms!estimate_line_items_room_id_fkey (
+              id,
+              is_active
+            )
+          `)
           .eq('estimate_id', estimateId)
 
         if (fetchError) {
@@ -95,11 +107,18 @@ export function CreateProposalDialog({
           return
         }
 
-        // Calculate total price (sum of all client_price)
+        // Calculate total price (sum of all client_price from ACTIVE rooms only)
         let total = 0
         let allowances = 0
 
-        for (const item of lineItems) {
+        for (const item of lineItems as any[]) {
+          // Filter out items from excluded (inactive) rooms
+          // Items without a room (room_id = null) are included by default
+          const room = item.rooms as { id: string; is_active: boolean } | null
+          if (room && room.is_active === false) {
+            continue // Skip excluded room items
+          }
+          
           const price = item.client_price || 0
           total += Number(price) || 0
 

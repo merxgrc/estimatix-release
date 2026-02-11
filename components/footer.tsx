@@ -15,17 +15,13 @@ export function Footer() {
             <p className="text-sm text-muted-foreground">AI-powered estimating for modern contractors.</p>
           </div>
 
+          {/* Phase 1: Pricing link removed per PHASE_1_RELEASE_CHECKLIST.md */}
           <div>
             <h3 className="mb-4 text-sm font-semibold">Product</h3>
             <ul className="space-y-2 text-sm text-muted-foreground">
               <li>
                 <Link href="#features" className="transition-colors hover:text-foreground">
                   Features
-                </Link>
-              </li>
-              <li>
-                <Link href="#pricing" className="transition-colors hover:text-foreground">
-                  Pricing
                 </Link>
               </li>
               <li>

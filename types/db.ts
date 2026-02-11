@@ -416,6 +416,94 @@ export interface Database {
           }
         ]
       }
+      plan_parses: {
+        Row: {
+          id: string
+          project_id: string
+          estimate_id: string | null
+          upload_id: string | null
+          file_urls: Json // string[]
+          status: 'uploaded' | 'processing' | 'parsed' | 'failed' | 'applied'
+          parse_result_json: Json | null
+          pages_of_interest: Json | null
+          source_file_pages: number | null
+          processing_time_ms: number | null
+          error_message: string | null
+          error_code: string | null
+          created_at: string
+          started_at: string | null
+          parsed_at: string | null
+          applied_at: string | null
+          applied_rooms_count: number | null
+          applied_line_items_count: number | null
+          excluded_rooms_count: number | null
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          estimate_id?: string | null
+          upload_id?: string | null
+          file_urls?: Json
+          status?: 'uploaded' | 'processing' | 'parsed' | 'failed' | 'applied'
+          parse_result_json?: Json | null
+          pages_of_interest?: Json | null
+          source_file_pages?: number | null
+          processing_time_ms?: number | null
+          error_message?: string | null
+          error_code?: string | null
+          created_at?: string
+          started_at?: string | null
+          parsed_at?: string | null
+          applied_at?: string | null
+          applied_rooms_count?: number | null
+          applied_line_items_count?: number | null
+          excluded_rooms_count?: number | null
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          estimate_id?: string | null
+          upload_id?: string | null
+          file_urls?: Json
+          status?: 'uploaded' | 'processing' | 'parsed' | 'failed' | 'applied'
+          parse_result_json?: Json | null
+          pages_of_interest?: Json | null
+          source_file_pages?: number | null
+          processing_time_ms?: number | null
+          error_message?: string | null
+          error_code?: string | null
+          created_at?: string
+          started_at?: string | null
+          parsed_at?: string | null
+          applied_at?: string | null
+          applied_rooms_count?: number | null
+          applied_line_items_count?: number | null
+          excluded_rooms_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plan_parses_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plan_parses_estimate_id_fkey"
+            columns: ["estimate_id"]
+            isOneToOne: false
+            referencedRelation: "estimates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plan_parses_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "uploads"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       estimates: {
         Row: {
           id: string
@@ -610,6 +698,20 @@ export type ProjectUpdate = Database['public']['Tables']['projects']['Update']
 export type Upload = Database['public']['Tables']['uploads']['Row']
 export type UploadInsert = Database['public']['Tables']['uploads']['Insert']
 export type UploadUpdate = Database['public']['Tables']['uploads']['Update']
+
+export type PlanParse = Database['public']['Tables']['plan_parses']['Row']
+export type PlanParseInsert = Database['public']['Tables']['plan_parses']['Insert']
+export type PlanParseUpdate = Database['public']['Tables']['plan_parses']['Update']
+
+/**
+ * Plan parse lifecycle status
+ * - uploaded:   File uploaded, not yet parsed
+ * - processing: Parse job started, AI analyzing
+ * - parsed:     Parse completed successfully, awaiting user review
+ * - failed:     Parse failed with error
+ * - applied:    User reviewed and applied results to estimate/rooms
+ */
+export type PlanParseStatus = PlanParse['status']
 
 export type Estimate = Database['public']['Tables']['estimates']['Row']
 export type EstimateInsert = Database['public']['Tables']['estimates']['Insert']
@@ -964,4 +1066,107 @@ export interface LineItemActualsUpdate {
   variance_percent?: number | null
   notes?: string | null
   updated_at?: string
+}
+
+// =============================================================================
+// Plan Parsing Types (Phase 1)
+// =============================================================================
+
+/**
+ * Page classification result from the 2-pass parsing pipeline.
+ * Pass 1 classifies pages to identify relevant ones for deep parsing.
+ */
+export type PageClassificationType = 
+  | 'cover'
+  | 'index'
+  | 'floor_plan'
+  | 'room_schedule'
+  | 'finish_schedule'
+  | 'notes'
+  | 'specs'
+  | 'elevation'
+  | 'section'
+  | 'detail'
+  | 'electrical'
+  | 'plumbing'
+  | 'mechanical'
+  | 'site_plan'
+  | 'irrelevant'
+  | 'other'
+  // Legacy aliases (for backward compatibility)
+  | 'schedule'
+  | 'spec'
+
+export interface PageClassification {
+  pageNumber: number
+  classification: PageClassificationType
+  hasRoomLabels: boolean
+  confidence: number
+}
+
+/**
+ * Room extracted from a blueprint/plan document.
+ * Used in parse_result_json.rooms
+ */
+export interface ParsedRoom {
+  id: string // Client-generated UUID for UI tracking
+  name: string
+  type?: string | null
+  area_sqft?: number | null
+  dimensions?: string | null
+  notes?: string | null
+  confidence?: number
+  is_included: boolean // User can toggle during review
+}
+
+/**
+ * Line item scaffold generated from blueprint parsing.
+ * NO PRICING - all cost fields are null until user enters them.
+ * Used in parse_result_json.lineItemScaffold
+ */
+export interface ParsedLineItem {
+  id: string // Client-generated UUID for UI tracking
+  description: string
+  category: string
+  cost_code?: string | null
+  room_name: string
+  quantity?: number | null
+  unit?: string | null
+  notes?: string | null
+  // Phase 1: These are always null - no pricing suggestions
+  direct_cost: null
+  client_price: null
+}
+
+/**
+ * Full parse result stored in plan_parses.parse_result_json
+ */
+export interface PlanParseResult {
+  rooms: ParsedRoom[]
+  lineItemScaffold: ParsedLineItem[]
+  assumptions: string[]
+  warnings: string[]
+  metadata?: {
+    model?: string
+    totalPages?: number
+    relevantPages?: number[]
+    processingTimeMs?: number
+  }
+}
+
+/**
+ * Pages of interest stored in plan_parses.pages_of_interest
+ */
+export interface PagesOfInterest {
+  classifications: PageClassification[]
+  relevantPages: number[]
+  totalPages: number
+}
+
+/**
+ * Extended PlanParse with typed JSON fields
+ */
+export interface PlanParseWithTypedResult extends Omit<PlanParse, 'parse_result_json' | 'pages_of_interest'> {
+  parse_result_json: PlanParseResult | null
+  pages_of_interest: PagesOfInterest | null
 }

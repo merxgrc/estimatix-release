@@ -129,7 +129,7 @@ export function EstimationAccuracyWidget() {
         </ResponsiveContainer>
         <div className="mt-4 flex items-center justify-center gap-4 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
-            <div className="h-3 w-3 rounded bg-blue-500" />
+            <div className="h-3 w-3 rounded bg-primary" />
             <span>Estimated</span>
           </div>
           <div className="flex items-center gap-2">

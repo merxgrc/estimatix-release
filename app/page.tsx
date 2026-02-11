@@ -7,7 +7,7 @@ import Link from "next/link"
 
 export default function LandingPage() {
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen flex-col w-full max-w-[100vw] overflow-x-hidden">
       <Navbar />
 
       {/* Hero Section */}
@@ -110,87 +110,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Pricing Section */}
-      <section id="pricing" className="border-t border-border px-4 py-20">
-        <div className="container mx-auto max-w-6xl">
-          <div className="mb-12 text-center">
-            <h2 className="mb-4 text-balance text-3xl font-bold md:text-4xl">Simple, Transparent Pricing</h2>
-            <p className="mx-auto max-w-2xl text-pretty text-muted-foreground">
-              Choose the plan that fits your business. All plans include core features.
-            </p>
-          </div>
-
-          <div className="grid gap-6 md:grid-cols-3">
-            <Card>
-              <CardHeader>
-                <CardTitle>Starter</CardTitle>
-                <CardDescription>Perfect for solo contractors</CardDescription>
-                <div className="mt-4">
-                  <span className="text-4xl font-bold">$29</span>
-                  <span className="text-muted-foreground">/month</span>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <ul className="space-y-2 text-sm text-muted-foreground">
-                  <li>✓ 50 estimates per month</li>
-                  <li>✓ Voice recording</li>
-                  <li>✓ PDF export</li>
-                  <li>✓ Email support</li>
-                </ul>
-                <Button className="mt-6 w-full bg-transparent" variant="outline">
-                  Get Started
-                </Button>
-              </CardContent>
-            </Card>
-
-            <Card className="border-primary">
-              <CardHeader>
-                <div className="mb-2 inline-block rounded-full bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground">
-                  POPULAR
-                </div>
-                <CardTitle>Professional</CardTitle>
-                <CardDescription>For growing businesses</CardDescription>
-                <div className="mt-4">
-                  <span className="text-4xl font-bold">$79</span>
-                  <span className="text-muted-foreground">/month</span>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <ul className="space-y-2 text-sm text-muted-foreground">
-                  <li>✓ Unlimited estimates</li>
-                  <li>✓ Voice recording</li>
-                  <li>✓ PDF & Excel export</li>
-                  <li>✓ Priority support</li>
-                  <li>✓ Custom branding</li>
-                </ul>
-                <Button className="mt-6 w-full">Get Started</Button>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Enterprise</CardTitle>
-                <CardDescription>For large teams</CardDescription>
-                <div className="mt-4">
-                  <span className="text-4xl font-bold">Custom</span>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <ul className="space-y-2 text-sm text-muted-foreground">
-                  <li>✓ Everything in Professional</li>
-                  <li>✓ Team collaboration</li>
-                  <li>✓ API access</li>
-                  <li>✓ Dedicated support</li>
-                  <li>✓ Custom integrations</li>
-                </ul>
-                <Button className="mt-6 w-full bg-transparent" variant="outline">
-                  Contact Sales
-                </Button>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </section>
+      {/* Phase 1: Pricing Section removed per PHASE_1_RELEASE_CHECKLIST.md */}
 
       {/* FAQ Section */}
       <section id="faq" className="border-t border-border px-4 py-20">

@@ -4,17 +4,16 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { LayoutDashboard, FolderOpen, TrendingUp, History, FileText, FolderPlus, LogOut, ChevronLeft, ChevronRight } from "lucide-react"
+import { LayoutDashboard, FolderOpen, FolderPlus, LogOut, ChevronLeft, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/db-client"
 
+// Phase 1: Only Dashboard and Projects visible
+// Market, Historical Data, and standalone Estimate removed per PHASE_1_RELEASE_CHECKLIST.md
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Projects", href: "/projects", icon: FolderOpen },
-  { name: "Market", href: "/market", icon: TrendingUp },
-  { name: "Historical Data", href: "/historical-data", icon: History },
-  { name: "Estimate", href: "/estimate", icon: FileText },
 ]
 
 const SIDEBAR_WIDTH_KEY = 'estimatix-sidebar-width'
@@ -148,8 +147,8 @@ export function Sidebar() {
       {/* Desktop Sidebar */}
       <aside 
         ref={sidebarRef}
-        className="fixed inset-y-0 left-0 z-50 hidden border-r border-border bg-secondary md:block transition-all duration-200"
-        style={{ width: `${currentWidth}px` }}
+        className="fixed inset-y-0 left-0 z-50 hidden border-r border-sidebar-border md:block transition-all duration-200"
+        style={{ width: `${currentWidth}px`, backgroundColor: 'var(--sidebar)' }}
       >
         <div className="flex h-full flex-col relative">
           {/* Resize Handle */}
@@ -157,17 +156,17 @@ export function Sidebar() {
             <div
               ref={resizeHandleRef}
               onMouseDown={handleMouseDown}
-              className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 transition-colors group"
+              className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-primary/50 transition-colors group"
               style={{ zIndex: 10 }}
             >
-              <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-x-1/2 w-1 h-16 bg-border rounded-full group-hover:bg-primary" />
+              <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-x-1/2 w-1 h-16 bg-sidebar-border rounded-full group-hover:bg-sidebar-primary" />
             </div>
           )}
 
           {/* Collapse Toggle Button */}
           <button
             onClick={toggleCollapse}
-            className="absolute top-4 -right-3 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background shadow-sm hover:bg-accent transition-colors"
+            className="absolute top-4 -right-3 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-sidebar-border bg-background shadow-sm hover:bg-primary hover:text-primary-foreground transition-colors"
             aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             {isCollapsed ? (
@@ -179,15 +178,15 @@ export function Sidebar() {
 
           {/* Logo */}
           <div className={cn(
-            "flex h-16 items-center border-b border-border transition-all",
+            "flex h-16 items-center border-b border-sidebar-border transition-all",
             isCollapsed ? "justify-center px-2" : "px-6"
           )}>
             <Link href="/" className="flex items-center space-x-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground flex-shrink-0">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground flex-shrink-0">
                 <span className="text-lg font-bold">E</span>
               </div>
               {!isCollapsed && (
-                <span className="text-xl font-bold whitespace-nowrap">Estimatix</span>
+                <span className="text-xl font-bold whitespace-nowrap text-sidebar-foreground">Estimatix</span>
               )}
             </Link>
           </div>
@@ -210,8 +209,8 @@ export function Sidebar() {
                     "flex items-center gap-3 rounded-lg py-2 text-sm font-medium transition-colors",
                     isCollapsed ? "justify-center px-2" : "px-3",
                     isActive
-                      ? "bg-background text-foreground"
-                      : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
+                      ? "bg-sidebar-primary text-sidebar-primary-foreground"
+                      : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                   )}
                   title={isCollapsed ? item.name : undefined}
                 >
@@ -224,10 +223,9 @@ export function Sidebar() {
               onClick={handleCreateProject}
               disabled={isCreatingProject}
               className={cn(
-                "w-full mt-2",
+                "w-full mt-2 bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary/90",
                 isCollapsed ? "justify-center px-2" : "justify-start"
               )}
-              variant="default"
               title={isCollapsed ? "New Project" : undefined}
             >
               {isCreatingProject ? (
@@ -246,14 +244,14 @@ export function Sidebar() {
 
           {/* User Section */}
           <div className={cn(
-            "border-t border-border transition-all",
+            "border-t border-sidebar-border transition-all",
             isCollapsed ? "p-2" : "p-4"
           )}>
             <div className={cn(
               "mb-3 flex items-center gap-3",
               isCollapsed ? "justify-center" : "px-2"
             )}>
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground flex-shrink-0">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sidebar-primary text-sm font-semibold text-sidebar-primary-foreground flex-shrink-0">
                 {user?.user_metadata?.full_name 
                   ? user.user_metadata.full_name.charAt(0).toUpperCase()
                   : user?.email 
@@ -262,10 +260,10 @@ export function Sidebar() {
               </div>
               {!isCollapsed && (
                 <div className="flex-1 text-sm min-w-0">
-                  <p className="font-medium truncate">
+                  <p className="font-medium truncate text-sidebar-foreground">
                     {user?.user_metadata?.full_name || user?.user_metadata?.name || 'User'}
                   </p>
-                  <p className="text-xs text-muted-foreground truncate">
+                  <p className="text-xs text-sidebar-foreground/70 truncate">
                     {user?.email || 'No email'}
                   </p>
                 </div>
@@ -274,7 +272,7 @@ export function Sidebar() {
             <Button 
               variant="ghost" 
               className={cn(
-                "w-full",
+                "w-full text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                 isCollapsed ? "justify-center px-2" : "justify-start"
               )}
               size="sm"
@@ -310,7 +308,7 @@ export function Sidebar() {
                 href={item.href}
                 className={cn(
                   "flex flex-1 flex-col items-center gap-1 py-3 text-xs font-medium transition-colors",
-                  isActive ? "text-foreground" : "text-muted-foreground",
+                  isActive ? "text-primary" : "text-muted-foreground",
                 )}
               >
                 <item.icon className="h-5 w-5" />
@@ -323,11 +321,11 @@ export function Sidebar() {
             disabled={isCreatingProject}
             className={cn(
               "flex flex-1 flex-col items-center gap-1 py-3 text-xs font-medium transition-colors",
-              isCreatingProject ? "text-muted-foreground" : "text-foreground",
+              isCreatingProject ? "text-muted-foreground" : "text-primary",
             )}
           >
             {isCreatingProject ? (
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-foreground border-t-transparent" />
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
             ) : (
               <FolderPlus className="h-5 w-5" />
             )}

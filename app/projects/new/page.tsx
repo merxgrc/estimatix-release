@@ -57,10 +57,10 @@ export default function NewProjectPage() {
 
   return (
     <AuthGuard>
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden">
         <Sidebar />
         <div 
-          className="flex-1 transition-all duration-200"
+          className="flex-1 min-w-0 transition-all duration-200"
           style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
         >
           {/* Top Bar */}

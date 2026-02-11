@@ -1011,8 +1011,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           direct_cost: item.direct_cost ?? null,
           margin_percent: item.margin_percent || 30,
           client_price: item.client_price ?? null,
-          pricing_source: item.pricing_source || null,
-          confidence: item.confidence ?? null
+          pricing_source: item.pricing_source || null
         }
         
         // Only include id if it exists and is a valid UUID (not temp-*)
@@ -1187,9 +1186,9 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     <div className="space-y-6">
       {/* Edit Lock Banner - shows when estimate is not in draft status */}
       {isLocked && (
-        <Alert className="border-blue-200 bg-blue-50">
-          <Lock className="h-4 w-4 text-blue-600" />
-          <AlertDescription className="text-blue-800">
+        <Alert className="border-primary/30 bg-primary/5">
+          <Lock className="h-4 w-4 text-primary" />
+          <AlertDescription className="text-primary">
             {getLockMessage(estimateStatus)}
           </AlertDescription>
         </Alert>
@@ -1290,8 +1289,8 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           )}
 
           {specSheetUrl && (
-            <Alert className="mb-4 border-blue-200 bg-blue-50">
-              <AlertDescription className="text-blue-800 flex items-center justify-between">
+            <Alert className="mb-4 border-primary/30 bg-primary/5">
+              <AlertDescription className="text-primary flex items-center justify-between">
                 <span>✓ Spec sheet generated successfully!</span>
                 <Button
                   onClick={() => window.open(specSheetUrl, '_blank')}
@@ -1500,7 +1499,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                   tooltip = 'Price based on your actual costs from completed jobs'
                                 } else if (priceSource === 'seed' || priceSource === 'task_library') {
                                   icon = <Database className="h-3 w-3" />
-                                  color = 'text-blue-600 bg-blue-50 border-blue-200'
+                                  color = 'text-primary bg-primary/5 border-primary/20'
                                   tooltip = 'Estimatix market rate (based on your quality tier)'
                                 } else if (priceSource === 'manual' || priceSource === 'manual_override') {
                                   icon = <User className="h-3 w-3" />
@@ -1722,7 +1721,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                         </Badge>
                                       )}
                                       {item.pricing_source === 'user_library' && (
-                                        <Badge variant="outline" className="h-5 text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 border-blue-300">
+                                        <Badge variant="outline" className="h-5 text-xs bg-primary/10 text-primary hover:bg-primary/20 border-primary/30">
                                           <Wrench className="h-3 w-3 mr-1" />
                                           History
                                         </Badge>

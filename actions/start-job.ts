@@ -127,9 +127,16 @@ export async function startJobFromContract(contractId: string) {
     }
 
     // 4. Fetch all estimate_line_items from the approved estimate
+    // Join with rooms to filter out excluded rooms (is_active = false)
     const { data: lineItems, error: lineItemsError } = await supabase
       .from('estimate_line_items')
-      .select('*')
+      .select(`
+        *,
+        rooms!estimate_line_items_room_id_fkey (
+          id,
+          is_active
+        )
+      `)
       .eq('estimate_id', estimateId)
       .order('created_at', { ascending: true })
 
@@ -141,9 +148,22 @@ export async function startJobFromContract(contractId: string) {
       throw new Error('No line items found for this estimate. Cannot start job without scope items.')
     }
 
-    // 5. Filter out empty descriptions and prepare tasks for bulk insert
+    // 5. Filter out empty descriptions AND excluded rooms, then prepare tasks for bulk insert
+    // Items without room_id (room_id = null) are included by default
     const tasksToInsert = lineItems
-      .filter(item => item.description && item.description.trim().length > 0)
+      .filter(item => {
+        // Filter out empty descriptions
+        if (!item.description || item.description.trim().length === 0) {
+          return false
+        }
+        // Include items without a room (General items)
+        const room = item.rooms as { id: string; is_active: boolean } | null
+        if (!room) {
+          return true // No room assigned = included by default
+        }
+        // Only include items from active/included rooms
+        return room.is_active === true
+      })
       .map(item => ({
         project_id: contract.project_id,
         original_line_item_id: item.id,
@@ -263,9 +283,16 @@ export async function startJobFromEstimate(projectId: string) {
     }
 
     // 4. Fetch all estimate_line_items from the estimate
+    // Join with rooms to filter out excluded rooms (is_active = false)
     const { data: lineItems, error: lineItemsError } = await supabase
       .from('estimate_line_items')
-      .select('*')
+      .select(`
+        *,
+        rooms!estimate_line_items_room_id_fkey (
+          id,
+          is_active
+        )
+      `)
       .eq('estimate_id', estimate.id)
       .order('created_at', { ascending: true })
 
@@ -277,9 +304,22 @@ export async function startJobFromEstimate(projectId: string) {
       throw new Error('No line items found for this estimate. Cannot start job without scope items.')
     }
 
-    // 5. Filter out empty descriptions and prepare tasks for bulk insert
+    // 5. Filter out empty descriptions AND excluded rooms, then prepare tasks for bulk insert
+    // Items without room_id (room_id = null) are included by default
     const tasksToInsert = lineItems
-      .filter(item => item.description && item.description.trim().length > 0)
+      .filter(item => {
+        // Filter out empty descriptions
+        if (!item.description || item.description.trim().length === 0) {
+          return false
+        }
+        // Include items without a room (General items)
+        const room = item.rooms as { id: string; is_active: boolean } | null
+        if (!room) {
+          return true // No room assigned = included by default
+        }
+        // Only include items from active/included rooms
+        return room.is_active === true
+      })
       .map(item => ({
         project_id: projectId,
         original_line_item_id: item.id,
