@@ -243,10 +243,10 @@ export default function RecordPage() {
   if (!projectInfo) {
     return (
       <AuthGuard>
-        <div className="flex min-h-screen">
+        <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden">
           <Sidebar />
           <div 
-            className="flex-1 flex items-center justify-center p-6 transition-all duration-200"
+            className="flex-1 min-w-0 flex items-center justify-center p-6 transition-all duration-200"
             style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
           >
             <Card className="max-w-xl w-full">
@@ -270,11 +270,11 @@ export default function RecordPage() {
 
   return (
     <AuthGuard>
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden">
         <Sidebar />
 
         <div 
-          className="flex-1 transition-all duration-200"
+          className="flex-1 min-w-0 transition-all duration-200"
           style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
         >
           {/* Top Bar */}
@@ -308,17 +308,17 @@ export default function RecordPage() {
 
             {/* Step Indicator */}
             <div className="flex items-center justify-center space-x-4">
-              <div className={`flex items-center space-x-2 ${currentStep === 'record' ? 'text-blue-600' : currentStep === 'parse' ? 'text-blue-600' : 'text-green-600'}`}>
+              <div className={`flex items-center space-x-2 ${currentStep === 'record' ? 'text-primary' : currentStep === 'parse' ? 'text-primary' : 'text-primary'}`}>
                 <Mic className="h-5 w-5" />
                 <span className="font-medium">Record</span>
               </div>
-              <div className="w-8 h-0.5 bg-gray-300"></div>
-              <div className={`flex items-center space-x-2 ${currentStep === 'parse' ? 'text-blue-600' : currentStep === 'estimate' ? 'text-green-600' : 'text-gray-400'}`}>
+              <div className="w-8 h-0.5 bg-border"></div>
+              <div className={`flex items-center space-x-2 ${currentStep === 'parse' ? 'text-primary' : currentStep === 'estimate' ? 'text-primary' : 'text-muted-foreground'}`}>
                 <Sparkles className="h-5 w-5" />
                 <span className="font-medium">Parse</span>
               </div>
-              <div className="w-8 h-0.5 bg-gray-300"></div>
-              <div className={`flex items-center space-x-2 ${currentStep === 'estimate' ? 'text-blue-600' : 'text-gray-400'}`}>
+              <div className="w-8 h-0.5 bg-border"></div>
+              <div className={`flex items-center space-x-2 ${currentStep === 'estimate' ? 'text-primary' : 'text-muted-foreground'}`}>
                 <span className="font-medium">Estimate</span>
               </div>
             </div>
@@ -327,11 +327,11 @@ export default function RecordPage() {
             {currentStep === 'record' && (
               <div className="space-y-4">
                 {isCreatingProject && (
-                  <Card className="border-blue-200 bg-blue-50">
+                  <Card className="border-primary/30 bg-primary/5">
                     <CardContent className="pt-6">
                       <div className="flex items-center justify-center space-x-2">
-                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"></div>
-                        <p className="text-sm text-blue-800">Creating project...</p>
+                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
+                        <p className="text-sm text-primary">Creating project...</p>
                       </div>
                     </CardContent>
                   </Card>
@@ -373,7 +373,7 @@ export default function RecordPage() {
               <Card className="mx-auto max-w-2xl">
                 <CardHeader className="text-center">
                   <CardTitle className="flex items-center justify-center space-x-2">
-                    <Sparkles className="h-6 w-6 text-blue-600" />
+                    <Sparkles className="h-6 w-6 text-primary" />
                     <span>Parsing Your Project</span>
                   </CardTitle>
                   <CardDescription>
@@ -395,13 +395,13 @@ export default function RecordPage() {
 
                   {!projectId && isCreatingProject ? (
                     <div className="text-center py-8">
-                      <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent"></div>
+                      <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
                       <p className="text-muted-foreground">Creating project...</p>
                       <p className="text-sm text-muted-foreground mt-2">Please wait while we set up your project</p>
                     </div>
                   ) : !projectId ? (
                     <div className="text-center py-8">
-                      <div className="text-yellow-600 mb-4">⚠️ Waiting for Project</div>
+                      <div className="text-primary mb-4">⚠️ Waiting for Project</div>
                       <p className="text-muted-foreground mb-4">Project creation is taking longer than expected.</p>
                       <Button onClick={resetFlow} variant="outline">
                         Start Over
@@ -409,7 +409,7 @@ export default function RecordPage() {
                     </div>
                   ) : isParsing ? (
                     <div className="text-center py-8">
-                      <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent"></div>
+                      <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
                       <p className="text-muted-foreground">Processing transcript...</p>
                     </div>
                   ) : parseError ? (
@@ -429,17 +429,17 @@ export default function RecordPage() {
                     </div>
                   ) : estimateData ? (
                     <div className="text-center py-8">
-                      <div className="text-green-600 mb-4">✅ Parse Complete</div>
+                      <div className="text-primary mb-4">✅ Parse Complete</div>
                       <p className="text-muted-foreground mb-4">
                         Found {estimateData?.items.length || 0} line items
                       </p>
-                      <Button onClick={() => setCurrentStep('estimate')} className="bg-blue-600 hover:bg-blue-700">
+                      <Button onClick={() => setCurrentStep('estimate')}>
                         Continue to Estimate
                       </Button>
                     </div>
                   ) : (
                     <div className="text-center py-8">
-                      <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent"></div>
+                      <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
                       <p className="text-muted-foreground">Preparing to parse...</p>
                     </div>
                   )}

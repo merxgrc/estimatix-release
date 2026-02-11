@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { chromium } from "playwright";
+import { launchBrowser } from "@/lib/pdf-browser";
 
 import { loadTemplate } from "@/lib/loadTemplate";
 import { renderTemplate } from "@/lib/renderTemplate";
@@ -647,32 +647,62 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
     let allItems = jsonData?.items || [];
 
     // Try to fetch line items from estimate_line_items table (authoritative source)
+    // Join with rooms to filter out excluded rooms (is_active = false)
     const { data: lineItemsData } = await supabase
       .from('estimate_line_items')
-      .select('*')
+      .select(`
+        *,
+        rooms!estimate_line_items_room_id_fkey (
+          id,
+          is_active
+        )
+      `)
       .eq('estimate_id', estimateId)
       .order('created_at', { ascending: true });
 
     if (lineItemsData && lineItemsData.length > 0) {
-      // Use line items from database (more accurate)
-      allItems = lineItemsData.map(item => ({
+      // Filter out items from excluded (inactive) rooms
+      // Items without a room (room_id = null) are included by default
+      const includedItems = lineItemsData.filter((item: any) => {
+        const room = item.rooms as { id: string; is_active: boolean } | null;
+        if (!room) {
+          return true; // No room assigned = included by default
+        }
+        return room.is_active === true;
+      });
+      
+      // Use filtered line items from database (more accurate)
+      allItems = includedItems.map((item: any) => ({
         category: item.category || 'Other',
         description: item.description || '',
         cost_code: item.cost_code || '999',
         room_name: item.room_name || 'General',
         labor_cost: item.labor_cost || null,
         margin_percent: item.margin_percent || null,
-        client_price: item.client_price || null
+        client_price: item.client_price || null,
+        is_allowance: item.is_allowance || false,
+        allowance_amount: item.allowance_amount || null
       }));
-      console.log('[PDF] Using estimate_line_items from database:', allItems.length, 'items');
+      console.log('[PDF] Using estimate_line_items from database:', allItems.length, 'items (after room filtering)');
     }
 
-    // Fetch selections for this estimate
-    const { data: selectionsData } = await supabase
-      .from('selections')
-      .select('*')
-      .eq('estimate_id', estimateId)
-      .order('created_at', { ascending: true });
+    // Fetch selections for this estimate (Phase 1: selections tab hidden but backend still works)
+    // This gracefully handles missing selections - will just be empty array
+    let selectionsData: any[] = [];
+    try {
+      const { data, error } = await supabase
+        .from('selections')
+        .select('*')
+        .eq('estimate_id', estimateId)
+        .order('created_at', { ascending: true });
+      
+      if (!error && data) {
+        selectionsData = data;
+      }
+    } catch (selectionsError) {
+      // Gracefully handle missing selections table or other errors
+      console.warn('[PDF] Could not fetch selections (Phase 1: OK to skip):', selectionsError);
+    }
 
     console.log('[PDF] Loaded', selectionsData?.length || 0, 'selections for estimate');
 
@@ -1014,7 +1044,7 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
     const htmlSample = html.substring(0, 2000);
     console.log('[PDF] HTML sample (first 2000 chars):', htmlSample);
 
-    const browser = await chromium.launch();
+    const browser = await launchBrowser();
     const page = await browser.newPage();
 
     await page.setContent(html, { waitUntil: "networkidle" });

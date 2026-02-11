@@ -6,9 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { EstimateTable } from "@/components/estimate/EstimateTable"
-import { Recorder } from "@/components/voice/Recorder"
 import type { Project, Estimate, EstimateStatus } from "@/types/db"
-import { Mic, FileText, Trash2, CheckCircle, FileSignature, Loader2, MapPin, Settings } from "lucide-react"
+import { FileText, Trash2, CheckCircle, FileSignature, Loader2, MapPin, Settings } from "lucide-react"
 import { finalizeBid, markContractSigned } from "@/actions/estimate-lifecycle"
 import { toast } from "sonner"
 import { supabase } from "@/lib/supabase/client"
@@ -24,8 +23,6 @@ interface EstimateTabProps {
   deletingEstimateId: string | null
   onDeleteEstimate: (estimateId: string) => Promise<void>
   onSave: (estimateId: string, total: number) => void
-  onRecordingComplete: (audioBlob: Blob, transcript: string) => Promise<void>
-  isParsing: boolean
   onEstimateStatusChange?: () => void // Callback to refresh estimates after status change
 }
 
@@ -35,15 +32,15 @@ interface EstimateTabProps {
 function getStatusBadge(status: EstimateStatus | null | undefined) {
   switch (status) {
     case 'draft':
-      return { label: 'Draft', variant: 'outline' as const, className: 'bg-gray-100 text-gray-700 border-gray-300' }
+      return { label: 'Draft', variant: 'outline' as const, className: 'bg-muted text-muted-foreground border-border' }
     case 'bid_final':
-      return { label: 'Bid Finalized', variant: 'default' as const, className: 'bg-blue-100 text-blue-800 border-blue-300' }
+      return { label: 'Bid Finalized', variant: 'default' as const, className: 'bg-primary/10 text-primary border-primary/30' }
     case 'contract_signed':
-      return { label: 'Contract Signed', variant: 'default' as const, className: 'bg-green-100 text-green-800 border-green-300' }
+      return { label: 'Contract Signed', variant: 'default' as const, className: 'bg-primary/20 text-primary border-primary/40' }
     case 'completed':
-      return { label: 'Completed', variant: 'default' as const, className: 'bg-purple-100 text-purple-800 border-purple-300' }
+      return { label: 'Completed', variant: 'default' as const, className: 'bg-primary text-primary-foreground border-primary' }
     default:
-      return { label: 'Draft', variant: 'outline' as const, className: 'bg-gray-100 text-gray-700 border-gray-300' }
+      return { label: 'Draft', variant: 'outline' as const, className: 'bg-muted text-muted-foreground border-border' }
   }
 }
 
@@ -56,12 +53,9 @@ export function EstimateTab({
   deletingEstimateId,
   onDeleteEstimate,
   onSave,
-  onRecordingComplete,
-  isParsing,
   onEstimateStatusChange
 }: EstimateTabProps) {
   const { user } = useAuth()
-  const [showRecorder, setShowRecorder] = useState(false)
   const [estimateStatus, setEstimateStatus] = useState<EstimateStatus | null>(null)
   const [isTransitioning, setIsTransitioning] = useState(false)
   const [userRegion, setUserRegion] = useState<string | null>(null)
@@ -168,52 +162,8 @@ export function EstimateTab({
 
   const statusBadge = getStatusBadge(estimateStatus)
 
-  const handleRecordingComplete = async (audioBlob: Blob, transcript: string) => {
-    await onRecordingComplete(audioBlob, transcript)
-    setShowRecorder(false)
-  }
-
   return (
     <div className="space-y-4">
-      {/* Create Estimate Button */}
-      <div className="flex justify-end">
-        <Button
-          onClick={() => setShowRecorder(!showRecorder)}
-          variant="default"
-          disabled={isParsing}
-        >
-          {isParsing ? (
-            <>
-              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-              Creating Estimate...
-            </>
-          ) : (
-            <>
-              <Mic className="mr-2 h-4 w-4" />
-              {showRecorder ? 'Cancel Recording' : 'Create Estimate with Voice'}
-            </>
-          )}
-        </Button>
-      </div>
-
-      {/* Recorder Component */}
-      {showRecorder && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Record Project Description</CardTitle>
-            <CardDescription>
-              Describe your project by voice. The AI will parse your description and create line items.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Recorder
-              projectId={projectId}
-              onRecordingComplete={handleRecordingComplete}
-            />
-          </CardContent>
-        </Card>
-      )}
-
       {/* Select Estimate (if multiple) */}
       {estimates.length > 1 && (
         <Card>
@@ -303,7 +253,6 @@ export function EstimateTab({
                     onClick={handleFinalizeBid}
                     disabled={isTransitioning}
                     size="sm"
-                    className="bg-blue-600 hover:bg-blue-700"
                   >
                     {isTransitioning ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />

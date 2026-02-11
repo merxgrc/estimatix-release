@@ -3,7 +3,7 @@ import { createServerClient } from '@/lib/supabase/server'
 import { requireAuth } from '@/lib/supabase/server'
 import { loadTemplate } from '@/lib/loadTemplate'
 import { renderTemplate } from '@/lib/renderTemplate'
-import { chromium } from 'playwright'
+import { launchBrowser } from '@/lib/pdf-browser'
 import { getProfileByUserId } from '@/lib/profile'
 
 export const runtime = 'nodejs'
@@ -154,8 +154,8 @@ export async function GET(
       make_checks_payable_to: companyName
     })
 
-    // Generate PDF using Playwright
-    const browser = await chromium.launch()
+    // Generate PDF using Playwright-core + @sparticuz/chromium
+    const browser = await launchBrowser()
     const page = await browser.newPage()
     await page.setContent(html, { waitUntil: 'networkidle' })
     const pdf = await page.pdf({ 

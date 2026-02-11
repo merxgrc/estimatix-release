@@ -142,15 +142,15 @@ export default function SignupPage() {
 
   return (
     <AuthGuard requireAuth={false}>
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="min-h-screen w-full max-w-[100vw] overflow-x-hidden flex items-center justify-center bg-secondary py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
-          <h2 className="mt-6 text-3xl font-extrabold text-gray-900">
+          <h2 className="mt-6 text-3xl font-extrabold text-foreground">
             Create your account
           </h2>
-          <p className="mt-2 text-sm text-gray-600">
+          <p className="mt-2 text-sm text-muted-foreground">
             Or{' '}
-            <Link href="/auth/login" className="font-medium text-indigo-600 hover:text-indigo-500">
+            <Link href="/auth/login" className="font-medium text-primary hover:text-primary/80">
               sign in to your existing account
             </Link>
           </p>
@@ -166,20 +166,20 @@ export default function SignupPage() {
           <CardContent>
             <form onSubmit={handleSignup} className="space-y-4">
               {error && (
-                <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-md text-sm">
+                <div className="bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 rounded-md text-sm">
                   {error}
                 </div>
               )}
               
               {message && (
-                <div className="bg-green-50 border border-green-200 text-green-600 px-4 py-3 rounded-md text-sm">
+                <div className="bg-primary/10 border border-primary/30 text-primary px-4 py-3 rounded-md text-sm">
                   {message}
                 </div>
               )}
               
               <div>
-                <label htmlFor="firstName" className="block text-sm font-medium text-gray-700">
-                  First name <span className="text-red-500">*</span>
+                <label htmlFor="firstName" className="block text-sm font-medium text-foreground">
+                  First name <span className="text-primary">*</span>
                 </label>
                 <input
                   id="firstName"
@@ -189,14 +189,14 @@ export default function SignupPage() {
                   required
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your first name"
                 />
               </div>
 
               <div>
-                <label htmlFor="lastName" className="block text-sm font-medium text-gray-700">
-                  Last name <span className="text-red-500">*</span>
+                <label htmlFor="lastName" className="block text-sm font-medium text-foreground">
+                  Last name <span className="text-primary">*</span>
                 </label>
                 <input
                   id="lastName"
@@ -206,14 +206,14 @@ export default function SignupPage() {
                   required
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your last name"
                 />
               </div>
 
               <div>
-                <label htmlFor="companyName" className="block text-sm font-medium text-gray-700">
-                  Company name <span className="text-red-500">*</span>
+                <label htmlFor="companyName" className="block text-sm font-medium text-foreground">
+                  Company name <span className="text-primary">*</span>
                 </label>
                 <input
                   id="companyName"
@@ -223,14 +223,14 @@ export default function SignupPage() {
                   required
                   value={companyName}
                   onChange={(e) => setCompanyName(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your company name"
                 />
               </div>
 
               <div>
-                <label htmlFor="trade" className="block text-sm font-medium text-gray-700">
-                  Trade <span className="text-red-500">*</span>
+                <label htmlFor="trade" className="block text-sm font-medium text-foreground">
+                  Trade <span className="text-primary">*</span>
                 </label>
                 <input
                   id="trade"
@@ -239,14 +239,14 @@ export default function SignupPage() {
                   required
                   value={trade}
                   onChange={(e) => setTrade(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your trade"
                 />
               </div>
               
               <div>
-                <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                  Email address <span className="text-red-500">*</span>
+                <label htmlFor="email" className="block text-sm font-medium text-foreground">
+                  Email address <span className="text-primary">*</span>
                 </label>
                 <input
                   id="email"
@@ -256,14 +256,14 @@ export default function SignupPage() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your email"
                 />
               </div>
               
               <div>
-                <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                  Password <span className="text-red-500">*</span>
+                <label htmlFor="password" className="block text-sm font-medium text-foreground">
+                  Password <span className="text-primary">*</span>
                 </label>
                 <input
                   id="password"
@@ -273,14 +273,14 @@ export default function SignupPage() {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your password"
                 />
               </div>
               
               <div>
-                <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700">
-                  Confirm Password <span className="text-red-500">*</span>
+                <label htmlFor="confirmPassword" className="block text-sm font-medium text-foreground">
+                  Confirm Password <span className="text-primary">*</span>
                 </label>
                 <input
                   id="confirmPassword"
@@ -290,7 +290,7 @@ export default function SignupPage() {
                   required
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Confirm your password"
                 />
               </div>

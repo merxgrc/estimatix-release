@@ -4,7 +4,8 @@ import { requireAuth } from '@/lib/supabase/server'
 
 export const runtime = 'nodejs' // Required for pdf-parse and Buffer operations
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB in bytes
+// 100MB limit for large blueprints/plans
+const MAX_FILE_SIZE = 100 * 1024 * 1024
 
 /**
  * Debug endpoint for testing PDF processing pipeline
@@ -136,11 +137,11 @@ export async function POST(req: NextRequest) {
     console.log('[PDF Debug] File size:', fileSizeMB.toFixed(2), 'MB')
 
     if (fileSizeBytes > MAX_FILE_SIZE) {
-      console.error('[PDF Debug] File size exceeds limit:', fileSizeMB.toFixed(2), 'MB > 10MB')
+      console.error('[PDF Debug] File size exceeds limit:', fileSizeMB.toFixed(2), 'MB > 100MB')
       return NextResponse.json(
         {
           success: false,
-          error: `File size (${fileSizeMB.toFixed(2)}MB) exceeds maximum allowed size (10MB)`,
+          error: `File size (${fileSizeMB.toFixed(2)}MB) exceeds maximum allowed size (100MB)`,
           code: 'FILE_TOO_LARGE',
           fileSize: fileSizeBytes,
           maxSize: MAX_FILE_SIZE,

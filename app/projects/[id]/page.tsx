@@ -13,11 +13,11 @@ import { EditableProjectTitle } from "@/components/editable-project-title"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { SummaryTab } from "./_components/SummaryTab"
 import { EstimateTab } from "./_components/EstimateTab"
-import { PricingTab } from "./_components/PricingTab"
+// Phase 1: PricingTab removed per PHASE_1_RELEASE_CHECKLIST.md
 import { RoomsTab } from "./_components/RoomsTab"
 import { FilesTab } from "@/components/files/FilesTab"
 import { SpecSheetsTab } from "./_components/SpecSheetsTab"
-import { SelectionsTab } from "./_components/SelectionsTab"
+// Phase 1: SelectionsTab removed per PHASE_1_RELEASE_CHECKLIST.md
 import { ProposalsTab } from "./_components/ProposalsTab"
 import { ContractsTab } from "./_components/ContractsTab"
 import { ManageTab } from "./_components/ManageTab"
@@ -67,7 +67,6 @@ export default function ProjectDetailPage() {
   const [activeEstimateId, setActiveEstimateId] = useState<string | null>(null)
   const [deletingProject, setDeletingProject] = useState(false)
   const [deletingEstimateId, setDeletingEstimateId] = useState<string | null>(null)
-  const [isParsing, setIsParsing] = useState(false)
   const [activeTab, setActiveTab] = useState("summary")
   const [isCopilotOpen, setIsCopilotOpen] = useState(false)
   const [isExportingPdf, setIsExportingPdf] = useState(false)
@@ -244,68 +243,6 @@ export default function ProjectDetailPage() {
   const handleEstimateSave = (estimateId: string, total: number) => {
     // Refresh estimates list
     db.getEstimates(projectId).then(setEstimates).catch(console.error)
-  }
-
-  const handleRecordingComplete = async (audioBlob: Blob, transcript: string) => {
-    if (!transcript.trim()) {
-      alert('No transcript available. Please try recording again.')
-      return
-    }
-
-    setIsParsing(true)
-
-    try {
-      // Parse transcript with AI
-      const response = await fetch('/api/ai/parse', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          projectId: projectId,
-          transcript: transcript
-        })
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        const errorMessage = errorData.error || `Parse failed: ${response.status}`
-        
-        // Provide user-friendly messages for common errors
-        if (response.status === 502 || response.status === 503 || response.status === 504) {
-          throw new Error(`Service temporarily unavailable. The AI parsing service is experiencing issues. Please try again in a few moments. (${errorMessage})`)
-        }
-        
-        throw new Error(errorMessage)
-      }
-
-      const result = await response.json()
-      
-      // Refresh estimates list to show the new estimate
-      // Use a small delay to ensure the database has committed the new estimate
-      await new Promise(resolve => setTimeout(resolve, 300))
-      const updatedEstimates = await db.getEstimates(projectId)
-      setEstimates(updatedEstimates)
-      
-      // Set the newly created estimate as active
-      if (result.estimateId) {
-        setActiveEstimateId(result.estimateId)
-        
-        // Force a re-render by ensuring the estimate is in the list
-        // The EstimateTable will update via the useEffect that watches initialData
-        // The estimateData is computed from activeEstimate which will update when estimates list updates
-      } else {
-        // If no estimateId was returned, try to find the most recent estimate
-        if (updatedEstimates.length > 0) {
-          setActiveEstimateId(updatedEstimates[0].id)
-        }
-      }
-    } catch (error) {
-      console.error('Parse error:', error)
-      alert(error instanceof Error ? error.message : 'Failed to parse transcript')
-    } finally {
-      setIsParsing(false)
-    }
   }
 
   const handleDeleteProject = async () => {
@@ -589,10 +526,10 @@ export default function ProjectDetailPage() {
   if (isLoading) {
     return (
       <AuthGuard>
-        <div className="flex min-h-screen">
+        <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden">
           <Sidebar />
           <div 
-            className="flex-1 flex items-center justify-center transition-all duration-200"
+            className="flex-1 min-w-0 flex items-center justify-center transition-all duration-200"
             style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
           >
             <div className="text-center">
@@ -608,10 +545,10 @@ export default function ProjectDetailPage() {
   if (error || !project) {
     return (
       <AuthGuard>
-        <div className="flex min-h-screen">
+        <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden">
           <Sidebar />
           <div 
-            className="flex-1 flex items-center justify-center p-6 transition-all duration-200"
+            className="flex-1 min-w-0 flex items-center justify-center p-6 transition-all duration-200"
             style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
           >
             <Card className="max-w-xl w-full border-destructive">
@@ -723,7 +660,7 @@ export default function ProjectDetailPage() {
           } else if (errorCode === 'PARSE_ERROR') {
             errorMessage = 'We could not parse this PDF. It may be corrupted or image-only. Try re-uploading or pasting the text manually.'
           } else if (errorCode === 'FILE_TOO_LARGE') {
-            errorMessage = `File is too large. Maximum size is 10MB.`
+            errorMessage = `File is too large. Maximum size is 100MB.`
           }
         } catch (e) {
           // If JSON parsing fails, use status text
@@ -861,14 +798,15 @@ export default function ProjectDetailPage() {
 
   return (
     <AuthGuard>
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden">
         <Sidebar />
 
         <div 
-          className="flex-1 transition-all duration-200 flex"
+          className="flex-1 min-w-0 transition-all duration-200"
           style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px`, marginRight: '0' }}
         >
-          <div className="flex-1 flex flex-col min-w-0">
+          {/* Main content - add right margin on large screens to make room for fixed chat */}
+          <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden lg:mr-[400px]">
             {/* Top Bar */}
             <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="flex h-16 items-center justify-between px-4 md:px-6">
@@ -951,14 +889,13 @@ export default function ProjectDetailPage() {
           </header>
 
           {/* Main Content */}
-          <main className="p-4 md:p-6">
+          <main className="p-4 md:p-6 overflow-x-hidden">
             {/* Tab Navigation */}
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="w-full grid grid-cols-10 gap-1">
+            {/* Phase 1: Pricing and Selections tabs removed per PHASE_1_RELEASE_CHECKLIST.md */}
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full overflow-x-auto">
+              <TabsList className="w-full grid grid-cols-4 lg:grid-cols-8 gap-1">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="estimate">Estimate</TabsTrigger>
-                <TabsTrigger value="pricing">Pricing</TabsTrigger>
-                <TabsTrigger value="selections">Selections</TabsTrigger>
                 <TabsTrigger value="rooms">Rooms</TabsTrigger>
                 <TabsTrigger value="files">Files</TabsTrigger>
                 <TabsTrigger value="proposals">Proposals</TabsTrigger>
@@ -994,26 +931,11 @@ export default function ProjectDetailPage() {
                   deletingEstimateId={deletingEstimateId}
                   onDeleteEstimate={handleDeleteEstimate}
                   onSave={handleEstimateSave}
-                  onRecordingComplete={handleRecordingComplete}
-                  isParsing={isParsing}
                   onEstimateStatusChange={fetchEstimates}
                 />
               </TabsContent>
 
-              <TabsContent value="pricing">
-                <PricingTab
-                  project={project}
-                  estimates={estimates}
-                  activeEstimateId={activeEstimateId}
-                />
-              </TabsContent>
-
-              <TabsContent value="selections">
-                <SelectionsTab
-                  project={project}
-                  activeEstimateId={activeEstimateId}
-                />
-              </TabsContent>
+              {/* Phase 1: Pricing and Selections TabsContent removed per PHASE_1_RELEASE_CHECKLIST.md */}
 
               <TabsContent value="rooms">
                 <RoomsTab project={project} />
@@ -1022,6 +944,7 @@ export default function ProjectDetailPage() {
               <TabsContent value="files">
                 <FilesTab 
                   projectId={projectId}
+                  estimateId={activeEstimateId || undefined}
                   onUseInCopilot={(fileUrl, fileName) => {
                     setIsCopilotOpen(true)
                     // Dispatch event to attach file to copilot
@@ -1033,6 +956,10 @@ export default function ProjectDetailPage() {
                         }
                       }))
                     }, 300)
+                  }}
+                  onBlueprintParsed={() => {
+                    // Refresh estimates and rooms after blueprint parsing
+                    fetchEstimates()
                   }}
                 />
               </TabsContent>
@@ -1061,17 +988,18 @@ export default function ProjectDetailPage() {
           </main>
           </div>
 
-          {/* Desktop Copilot Sidebar */}
-          <aside className="hidden lg:block w-[400px] flex-shrink-0 border-l border-border">
-            <CopilotChat
-              projectId={projectId}
-              onSendMessage={handleSendMessage}
-              onVoiceRecord={handleVoiceRecord}
-              onFileAttach={handleFileAttach}
-              className="h-screen sticky top-0"
-            />
-          </aside>
         </div>
+
+        {/* Desktop Copilot Sidebar - Fixed position, always visible when scrolling */}
+        <aside className="hidden lg:flex fixed top-0 right-0 w-[400px] h-screen border-l border-border bg-background z-20">
+          <CopilotChat
+            projectId={projectId}
+            onSendMessage={handleSendMessage}
+            onVoiceRecord={handleVoiceRecord}
+            onFileAttach={handleFileAttach}
+            className="h-full w-full"
+          />
+        </aside>
 
         {/* Mobile Copilot Drawer */}
         <Drawer open={isCopilotOpen} onOpenChange={setIsCopilotOpen}>

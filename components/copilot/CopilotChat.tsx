@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/auth-context'
 import { toast } from 'sonner'
 import { useVoiceChat } from '@/hooks/use-voice-chat'
+import * as tus from 'tus-js-client'
 import type { ChatMessage } from '@/types/db'
 
 interface CopilotChatProps {
@@ -280,9 +281,13 @@ export function CopilotChat({
           continue
         }
 
-        // Validate file size (max 10MB)
-        if (file.size > 10 * 1024 * 1024) {
-          alert(`File ${file.name} is too large. Maximum size is 10MB.`)
+        // Validate file size (max 100MB - Supabase bucket limit set in migration 032)
+        const MAX_FILE_SIZE_MB = 100
+        if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+          toast.error(`File too large`, {
+            description: `${file.name} is ${(file.size / 1024 / 1024).toFixed(1)}MB. Max is ${MAX_FILE_SIZE_MB}MB. Compress with SmallPDF.com or split into smaller files.`,
+            duration: 8000,
+          })
           continue
         }
 
@@ -291,19 +296,94 @@ export function CopilotChat({
         const fileExt = file.name.split('.').pop() || 'bin'
         const fileName = `${user.id}/copilot/${projectId}/${timestamp}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`
         
-        // Upload to Supabase Storage
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('uploads')
-          .upload(fileName, file, {
-            contentType: file.type,
-            upsert: false
+        // For large files (>6MB), use TUS resumable upload
+        const LARGE_FILE_THRESHOLD = 6 * 1024 * 1024
+        let uploadSuccess = false
+        
+        if (file.size > LARGE_FILE_THRESHOLD) {
+          // Use TUS resumable upload for large files
+          console.log(`[Upload] Large file detected (${(file.size / 1024 / 1024).toFixed(1)}MB), using TUS resumable upload`)
+          
+          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+          const { data: { session } } = await supabase.auth.getSession()
+          const accessToken = session?.access_token
+          
+          if (!accessToken) {
+            alert('Authentication required for upload')
+            continue
+          }
+          
+          toast.info('Uploading large file...', { 
+            description: 'This may take a moment.',
+            duration: 10000,
           })
 
-        if (uploadError) {
-          console.error('Upload error:', uploadError)
-          alert(`Failed to upload ${file.name}: ${uploadError.message}`)
-          continue
+          try {
+            await new Promise<void>((resolve, reject) => {
+              const upload = new tus.Upload(file, {
+                endpoint: `${supabaseUrl}/storage/v1/upload/resumable`,
+                retryDelays: [0, 1000, 3000, 5000],
+                headers: {
+                  authorization: `Bearer ${accessToken}`,
+                  'x-upsert': 'false',
+                },
+                uploadDataDuringCreation: true,
+                removeFingerprintOnSuccess: true,
+                metadata: {
+                  bucketName: 'uploads',
+                  objectName: fileName,
+                  contentType: file.type,
+                  cacheControl: '3600',
+                },
+                chunkSize: 6 * 1024 * 1024, // 6MB chunks
+                onError: (error) => {
+                  console.error('[TUS Upload] Error:', error)
+                  reject(new Error(`Upload failed: ${error.message}`))
+                },
+                onProgress: (bytesUploaded, bytesTotal) => {
+                  const percentage = Math.round((bytesUploaded / bytesTotal) * 100)
+                  console.log(`[TUS Upload] Progress: ${percentage}%`)
+                },
+                onSuccess: () => {
+                  console.log('[TUS Upload] Success!')
+                  resolve()
+                },
+              })
+
+              upload.findPreviousUploads().then((previousUploads) => {
+                if (previousUploads.length > 0) {
+                  console.log('[TUS Upload] Resuming previous upload...')
+                  upload.resumeFromPreviousUpload(previousUploads[0])
+                }
+                upload.start()
+              })
+            })
+            
+            uploadSuccess = true
+          } catch (tusError) {
+            console.error('TUS upload error:', tusError)
+            alert(`Failed to upload ${file.name}: ${tusError instanceof Error ? tusError.message : 'Unknown error'}`)
+            continue
+          }
+        } else {
+          // Standard upload for smaller files
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('uploads')
+            .upload(fileName, file, {
+              contentType: file.type,
+              upsert: false
+            })
+
+          if (uploadError) {
+            console.error('Upload error:', uploadError)
+            alert(`Failed to upload ${file.name}: ${uploadError.message}`)
+            continue
+          }
+          
+          uploadSuccess = true
         }
+        
+        if (!uploadSuccess) continue
 
         // Get public URL
         const { data: { publicUrl } } = supabase.storage
@@ -467,7 +547,7 @@ export function CopilotChat({
         })
       } else if (errorCode === 'FILE_TOO_LARGE') {
         toast.error('File Too Large', {
-          description: 'The file exceeds the 10MB limit. Please use a smaller file.',
+          description: 'The file exceeds the 100MB limit. Please use a smaller file.',
         })
       } else if (errorCode === 'DOWNLOAD_ERROR' || errorCode === 'PARSE_ERROR') {
         toast.error('File Processing Error', {

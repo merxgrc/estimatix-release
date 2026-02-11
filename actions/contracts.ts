@@ -92,4 +92,92 @@ export async function createContractFromProposal(
   }
 }
 
+/**
+ * Recalculate and update a contract's total_price from current estimate line items.
+ * Follows the chain: contract -> proposal -> estimate -> line items (filtered by room is_active).
+ */
+export async function regenerateContractTotal(
+  contractId: string
+): Promise<{ success: boolean; newTotal?: number; error?: string }> {
+  try {
+    const user = await requireAuth()
+    if (!user || !user.id) {
+      throw new Error('Authentication required')
+    }
+
+    const supabase = await createServerClient()
+
+    // Fetch contract with proposal relationship
+    const { data: contract, error: contractError } = await supabase
+      .from('contracts')
+      .select('id, project_id, proposal_id, proposals(estimate_id)')
+      .eq('id', contractId)
+      .maybeSingle()
+
+    if (contractError || !contract) {
+      throw new Error('Contract not found')
+    }
+
+    // Verify project ownership
+    const { data: project, error: projectError } = await supabase
+      .from('projects')
+      .select('id, user_id')
+      .eq('id', contract.project_id)
+      .single()
+
+    if (projectError || !project || project.user_id !== user.id) {
+      throw new Error('Unauthorized')
+    }
+
+    const proposal = contract.proposals as any
+    const estimateId = proposal?.estimate_id
+    if (!estimateId) {
+      throw new Error('Contract has no linked estimate')
+    }
+
+    // Fetch line items with room exclusion filter
+    const { data: lineItems, error: lineItemsError } = await supabase
+      .from('estimate_line_items')
+      .select(`
+        client_price,
+        room_id,
+        rooms!estimate_line_items_room_id_fkey (
+          id,
+          is_active
+        )
+      `)
+      .eq('estimate_id', estimateId)
+
+    if (lineItemsError) {
+      throw new Error(`Failed to fetch line items: ${lineItemsError.message}`)
+    }
+
+    // Calculate new total (only active rooms)
+    let newTotal = 0
+    for (const item of (lineItems || []) as any[]) {
+      const room = item.rooms as { id: string; is_active: boolean } | null
+      if (room && room.is_active === false) continue
+      newTotal += Number(item.client_price) || 0
+    }
+
+    // Update contract total_price
+    const { error: updateError } = await supabase
+      .from('contracts')
+      .update({ total_price: newTotal })
+      .eq('id', contractId)
+
+    if (updateError) {
+      throw new Error(`Failed to update contract: ${updateError.message}`)
+    }
+
+    return { success: true, newTotal }
+  } catch (error) {
+    console.error('Error regenerating contract total:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }
+  }
+}
+
 

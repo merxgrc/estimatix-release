@@ -7,10 +7,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { supabase } from "@/lib/supabase/client"
-import { Plus, FileText, CheckCircle2, AlertCircle, Eye } from "lucide-react"
+import { Plus, FileText, CheckCircle2, AlertCircle, Eye, RefreshCcw, Loader2 } from "lucide-react"
 import { toast } from 'sonner'
 import type { Project } from "@/types/db"
 import { CreateProposalDialog } from './CreateProposalDialog'
+import { regenerateProposalTotal } from '@/actions/proposals'
 
 interface Proposal {
   id: string
@@ -23,6 +24,7 @@ interface Proposal {
   approved_at: string | null
   created_at: string
   created_by: string | null
+  is_stale?: boolean // Added for tracking if estimate changed after proposal creation
 }
 
 interface ProposalsTabProps {
@@ -48,8 +50,8 @@ const formatDate = (dateString: string | null) => {
 
 const StatusBadge = ({ status }: { status: Proposal['status'] }) => {
   const variants: Record<Proposal['status'], { label: string; className: string }> = {
-    draft: { label: 'Draft', className: 'bg-gray-100 text-gray-800' },
-    sent: { label: 'Sent', className: 'bg-blue-100 text-blue-800' },
+    draft: { label: 'Draft', className: 'bg-muted text-muted-foreground' },
+    sent: { label: 'Sent', className: 'bg-primary/10 text-primary' },
     approved: { label: 'Approved', className: 'bg-green-100 text-green-800' },
     rejected: { label: 'Rejected', className: 'bg-red-100 text-red-800' },
   }
@@ -70,6 +72,7 @@ export function ProposalsTab({ project, activeEstimateId }: ProposalsTabProps) {
   const [isCreating, setIsCreating] = useState(false)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [approvingId, setApprovingId] = useState<string | null>(null)
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
 
   // Load proposals when project changes
   useEffect(() => {
@@ -93,7 +96,48 @@ export function ProposalsTab({ project, activeEstimateId }: ProposalsTabProps) {
           throw new Error(`Failed to load proposals: ${fetchError.message}`)
         }
 
-        setProposals(data || [])
+        // Check staleness for each proposal
+        // A proposal is "stale" if line items or rooms were modified after proposal creation
+        const proposalsWithStaleness = await Promise.all(
+          (data || []).map(async (proposal) => {
+            if (!proposal.estimate_id) {
+              return { ...proposal, is_stale: false }
+            }
+
+            // Get the most recent update to line items or rooms
+            const [lineItemsResult, roomsResult] = await Promise.all([
+              supabase
+                .from('estimate_line_items')
+                .select('updated_at')
+                .eq('estimate_id', proposal.estimate_id)
+                .order('updated_at', { ascending: false })
+                .limit(1)
+                .maybeSingle(),
+              supabase
+                .from('rooms')
+                .select('updated_at')
+                .eq('project_id', project.id)
+                .order('updated_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+            ])
+
+            const proposalCreatedAt = new Date(proposal.created_at).getTime()
+            const lineItemUpdatedAt = lineItemsResult.data?.updated_at 
+              ? new Date(lineItemsResult.data.updated_at).getTime() 
+              : 0
+            const roomUpdatedAt = roomsResult.data?.updated_at
+              ? new Date(roomsResult.data.updated_at).getTime()
+              : 0
+
+            const latestUpdate = Math.max(lineItemUpdatedAt, roomUpdatedAt)
+            const is_stale = latestUpdate > proposalCreatedAt
+
+            return { ...proposal, is_stale }
+          })
+        )
+
+        setProposals(proposalsWithStaleness)
       } catch (err) {
         console.error('Error loading proposals:', err)
         setError(err instanceof Error ? err.message : 'Failed to load proposals')
@@ -104,6 +148,33 @@ export function ProposalsTab({ project, activeEstimateId }: ProposalsTabProps) {
 
     loadProposals()
   }, [project?.id])
+
+  const handleRegenerate = async (proposalId: string) => {
+    try {
+      setRegeneratingId(proposalId)
+      const result = await regenerateProposalTotal(proposalId)
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to regenerate')
+      }
+
+      // Update local state with new total and clear stale flag
+      setProposals(prev =>
+        prev.map(p =>
+          p.id === proposalId
+            ? { ...p, total_price: result.newTotal ?? p.total_price, is_stale: false }
+            : p
+        )
+      )
+
+      toast.success(`Total updated to ${formatCurrency(result.newTotal)}`)
+    } catch (err) {
+      console.error('Error regenerating proposal:', err)
+      toast.error(err instanceof Error ? err.message : 'Failed to regenerate total')
+    } finally {
+      setRegeneratingId(null)
+    }
+  }
 
   const handleMarkApproved = async (proposalId: string) => {
     try {
@@ -376,7 +447,17 @@ export function ProposalsTab({ project, activeEstimateId }: ProposalsTabProps) {
                       {formatDate(proposal.created_at)}
                     </TableCell>
                     <TableCell>v{proposal.version}</TableCell>
-                    <TableCell>{proposal.title}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {proposal.title}
+                        {proposal.is_stale && (
+                          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
+                            <RefreshCcw className="mr-1 h-3 w-3" />
+                            Out of date
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell className="text-right font-semibold">
                       {formatCurrency(proposal.total_price)}
                     </TableCell>
@@ -385,10 +466,32 @@ export function ProposalsTab({ project, activeEstimateId }: ProposalsTabProps) {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-2">
+                        {proposal.is_stale && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleRegenerate(proposal.id)}
+                            disabled={regeneratingId === proposal.id}
+                            className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                          >
+                            {regeneratingId === proposal.id ? (
+                              <>
+                                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                                Updating...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCcw className="mr-1 h-4 w-4" />
+                                Update Total
+                              </>
+                            )}
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleViewPdf(proposal.id)}
+                          title={proposal.is_stale ? "PDF will reflect current estimate (rooms/line items may have changed)" : undefined}
                         >
                           <Eye className="mr-1 h-4 w-4" />
                           View PDF

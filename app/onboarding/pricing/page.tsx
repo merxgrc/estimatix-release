@@ -244,7 +244,7 @@ export default function PricingOnboardingPage() {
   if (isLoading) {
     return (
       <AuthGuard>
-        <div className="flex min-h-screen items-center justify-center">
+        <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden items-center justify-center">
           <div className="text-center">
             <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
             <p className="text-muted-foreground">Loading settings...</p>
@@ -256,7 +256,7 @@ export default function PricingOnboardingPage() {
 
   return (
     <AuthGuard>
-      <div className="flex min-h-screen items-center justify-center bg-muted/50 p-4">
+      <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden items-center justify-center bg-muted/50 p-4">
         <Card className="w-full max-w-2xl">
           <CardHeader>
             <CardTitle className="text-2xl">Pricing Setup</CardTitle>

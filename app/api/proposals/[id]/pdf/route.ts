@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { chromium } from "playwright"
+import { launchBrowser } from "@/lib/pdf-browser"
 import { loadTemplate } from "@/lib/loadTemplate"
 import { renderTemplate } from "@/lib/renderTemplate"
 import { createServerClient, requireAuth } from "@/lib/supabase/server"
@@ -116,14 +116,25 @@ export async function GET(
     } || {}
 
     // Fetch ALL line items from the estimate and separate allowances from scope work
+    // Only include items from active/included rooms
     let allowanceItems: Array<{ description: string; client_price: number }> = []
     let scopeItems: Array<{ description: string; client_price: number }> = []
     let totalAllowances = 0
     
     if (proposal.estimate_id) {
+      // Join with rooms to filter out excluded rooms (is_active = false)
       const { data: lineItemsData, error: lineItemsError } = await supabase
         .from('estimate_line_items')
-        .select('description, client_price, is_allowance')
+        .select(`
+          description, 
+          client_price, 
+          is_allowance,
+          room_id,
+          rooms!estimate_line_items_room_id_fkey (
+            id,
+            is_active
+          )
+        `)
         .eq('estimate_id', proposal.estimate_id)
         .order('created_at', { ascending: true })
 
@@ -131,6 +142,13 @@ export async function GET(
         lineItemsData.forEach((item: any) => {
           const desc = item.description || ''
           if (desc.trim().length === 0) return
+          
+          // Filter out items from excluded (inactive) rooms
+          // Items without a room (room_id = null) are included by default
+          const room = item.rooms as { id: string; is_active: boolean } | null
+          if (room && room.is_active === false) {
+            return // Skip excluded room items
+          }
           
           const isAllowance = item.is_allowance === true || 
                              (desc.toUpperCase().trim().startsWith('ALLOWANCE:'))
@@ -238,10 +256,10 @@ export async function GET(
       )
     }
 
-    // Generate PDF using Playwright
+    // Generate PDF using Playwright-core + @sparticuz/chromium
     let browser
     try {
-      browser = await chromium.launch()
+      browser = await launchBrowser()
       const page = await browser.newPage()
 
       await page.setContent(html, { waitUntil: "networkidle" })

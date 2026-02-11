@@ -3,7 +3,7 @@ import { createServerClient } from '@/lib/supabase/server'
 import { requireAuth } from '@/lib/supabase/server'
 import { loadTemplate } from '@/lib/loadTemplate'
 import { renderTemplate } from '@/lib/renderTemplate'
-import { chromium } from 'playwright'
+import { launchBrowser } from '@/lib/pdf-browser'
 import { getProfileByUserId } from '@/lib/profile'
 
 export const runtime = 'nodejs'
@@ -71,19 +71,34 @@ export async function GET(
 
       if (proposal && proposal.estimate_id) {
         // Fetch line items from the estimate (exclude allowances)
+        // Join with rooms to filter out excluded rooms (is_active = false)
         const { data: lineItemsData } = await supabase
           .from('estimate_line_items')
-          .select('description, is_allowance')
+          .select(`
+            description, 
+            is_allowance,
+            room_id,
+            rooms!estimate_line_items_room_id_fkey (
+              id,
+              is_active
+            )
+          `)
           .eq('estimate_id', proposal.estimate_id)
           .order('created_at', { ascending: true })
 
         if (lineItemsData && lineItemsData.length > 0) {
-          // Filter out allowances and empty descriptions
+          // Filter out allowances, empty descriptions, and excluded rooms
           scopeItems = lineItemsData
             .filter((item: any) => {
               const desc = item.description || ''
               const isAllowance = item.is_allowance === true || 
                                  (desc.toUpperCase().trim().startsWith('ALLOWANCE:'))
+              // Filter out items from excluded (inactive) rooms
+              // Items without a room (room_id = null) are included by default
+              const room = item.rooms as { id: string; is_active: boolean } | null
+              if (room && room.is_active === false) {
+                return false // Skip excluded room items
+              }
               return desc.trim().length > 0 && !isAllowance
             })
             .map((item: any) => ({
@@ -158,8 +173,8 @@ export async function GET(
       completion_date: completionDate
     })
 
-    // Generate PDF using Playwright
-    const browser = await chromium.launch()
+    // Generate PDF using Playwright-core + @sparticuz/chromium
+    const browser = await launchBrowser()
     const page = await browser.newPage()
     await page.setContent(html, { waitUntil: 'networkidle' })
     const pdf = await page.pdf({ 

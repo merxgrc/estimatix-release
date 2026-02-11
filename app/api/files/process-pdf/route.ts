@@ -3,7 +3,8 @@ import { createServiceRoleClient } from '@/lib/supabase/server'
 
 export const runtime = 'nodejs'
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+// 100MB limit for large blueprints/plans
+const MAX_FILE_SIZE = 100 * 1024 * 1024
 
 async function parseWithPdfParse(buffer: Buffer) {
   const pdfParseModule = await import('pdf-parse')
@@ -63,9 +64,15 @@ export async function POST(req: NextRequest) {
       const fileSizeMB = (buffer.length / (1024 * 1024)).toFixed(2)
       console.warn(`[PDF Warning] File too large (${fileSizeMB}MB) for ${filePath}`)
       return NextResponse.json(
-        { code: 'FILE_TOO_LARGE', message: 'PDF exceeds 10MB size limit.' },
+        { code: 'FILE_TOO_LARGE', message: 'PDF exceeds 100MB size limit.' },
         { status: 413 }
       )
+    }
+
+    // Log for large files
+    if (buffer.length > 50 * 1024 * 1024) {
+      const fileSizeMB = (buffer.length / (1024 * 1024)).toFixed(2)
+      console.log(`[PDF Info] Processing large file (${fileSizeMB}MB): ${filePath}`)
     }
 
     // Primary attempt: pdf-parse

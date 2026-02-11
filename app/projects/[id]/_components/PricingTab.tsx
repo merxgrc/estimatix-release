@@ -92,7 +92,7 @@ function groupByScopeThenRoom(items: LineItem[]) {
 // Confidence badge component
 function ConfidenceBadge({ value }: { value: number | null }) {
   if (value === null || value === undefined) {
-    return <span className="text-xs text-gray-400">—</span>
+    return <span className="text-xs text-muted-foreground">—</span>
   }
   
   const color = value > 90 ? "text-green-600" :
@@ -127,6 +127,8 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
   const [applySuccess, setApplySuccess] = useState(false)
   const [updatingMargins, setUpdatingMargins] = useState<Set<string>>(new Set())
   const [savingOverrides, setSavingOverrides] = useState<Set<string>>(new Set())
+  // Map of room_id -> is_active for computing active-scope totals
+  const [roomActiveMap, setRoomActiveMap] = useState<Map<string, boolean>>(new Map())
 
   // Load line items when estimate changes
   useEffect(() => {
@@ -162,6 +164,28 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
 
     loadLineItems()
   }, [activeEstimateId])
+
+  // Load room active status for computing active-scope totals
+  useEffect(() => {
+    const loadRooms = async () => {
+      if (!project?.id) return
+
+      const { data: rooms } = await supabase
+        .from('rooms')
+        .select('id, is_active')
+        .eq('project_id', project.id)
+
+      if (rooms) {
+        const map = new Map<string, boolean>()
+        rooms.forEach((r: { id: string; is_active: boolean | null }) => {
+          map.set(r.id, r.is_active !== false) // treat null as active
+        })
+        setRoomActiveMap(map)
+      }
+    }
+
+    loadRooms()
+  }, [project?.id])
 
   // Load selections when estimate changes
   useEffect(() => {
@@ -404,16 +428,29 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
     return category?.label || scope
   }
 
-  // Calculate totals
+  // Calculate totals (all items + active-scope only)
   const totals = lineItems.reduce(
     (acc, item) => {
-      acc.directCost += item.direct_cost || 0
-      acc.clientPrice += item.client_price || 0
+      const dc = item.direct_cost || 0
+      const cp = item.client_price || 0
+      acc.directCost += dc
+      acc.clientPrice += cp
+
+      // Active-scope: include if room is active or item has no room
+      const roomId = (item as any).room_id as string | null
+      const isActive = !roomId || (roomActiveMap.get(roomId) !== false)
+      if (isActive) {
+        acc.activeDirectCost += dc
+        acc.activeClientPrice += cp
+      }
+
       return acc
     },
-    { directCost: 0, clientPrice: 0 }
+    { directCost: 0, clientPrice: 0, activeDirectCost: 0, activeClientPrice: 0 }
   )
   const totalMargin = totals.clientPrice - totals.directCost
+  const activeMargin = totals.activeClientPrice - totals.activeDirectCost
+  const hasExcludedRooms = totals.clientPrice !== totals.activeClientPrice
 
   const activeEstimate = activeEstimateId ? estimates.find(e => e.id === activeEstimateId) : null
 
@@ -434,7 +471,6 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
         <Button
           onClick={handleApplyPricing}
           disabled={isApplyingPricing || !activeEstimateId}
-          className="bg-blue-600 hover:bg-blue-700"
         >
           {isApplyingPricing ? (
             <>
@@ -639,7 +675,7 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
                                 <div className="flex items-center justify-between pt-2">
                                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                     {item.pricing_source === 'user_library' && (
-                                      <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded">
+                                      <span className="bg-primary/10 text-primary px-2 py-1 rounded">
                                         Custom
                                       </span>
                                     )}
@@ -718,6 +754,16 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
                     ${totals.clientPrice.toFixed(2)}
                   </span>
                 </div>
+                {hasExcludedRooms && (
+                  <div className="flex items-center justify-between gap-8 border-t pt-2 mt-2">
+                    <span className="text-muted-foreground font-semibold text-sm">
+                      Active Scope Only:
+                    </span>
+                    <span className="font-bold text-lg text-primary">
+                      {formatCurrency(totals.activeClientPrice)}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           </CardContent>

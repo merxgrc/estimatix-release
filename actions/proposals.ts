@@ -93,9 +93,16 @@ export async function createProposalFromEstimate(
     }
 
     // 1. Fetch all estimate_line_items for the given estimateId
+    // Join with rooms to filter out excluded rooms (is_active = false)
     const { data: lineItems, error: lineItemsError } = await supabase
       .from('estimate_line_items')
-      .select('*')
+      .select(`
+        *,
+        rooms!estimate_line_items_room_id_fkey (
+          id,
+          is_active
+        )
+      `)
       .eq('estimate_id', estimateId)
 
     if (lineItemsError) {
@@ -107,10 +114,18 @@ export async function createProposalFromEstimate(
     }
 
     // 2. Calculate totals and extract allowance items
+    // Only include items from active/included rooms
     let totalPrice = 0
     const allowanceItems: AllowanceItem[] = []
 
     for (const item of lineItems) {
+      // Filter out items from excluded (inactive) rooms
+      // Items without a room (room_id = null) are included by default
+      const room = (item as any).rooms as { id: string; is_active: boolean } | null
+      if (room && room.is_active === false) {
+        continue // Skip excluded room items
+      }
+
       // Sum all client_price values
       if (item.client_price !== null && item.client_price !== undefined) {
         totalPrice += Number(item.client_price) || 0
@@ -233,3 +248,104 @@ export async function createProposalFromEstimate(
   }
 }
 
+/**
+ * Recalculate and update a proposal's total_price from current estimate line items.
+ * Filters out items from excluded (inactive) rooms.
+ * Used when scope changes make the stored total_price stale.
+ */
+export async function regenerateProposalTotal(
+  proposalId: string
+): Promise<{ success: boolean; newTotal?: number; error?: string }> {
+  try {
+    const user = await requireAuth()
+    if (!user || !user.id) {
+      throw new Error('Authentication required')
+    }
+
+    const supabase = await createServerClient()
+
+    // Fetch proposal with its estimate_id
+    const { data: proposal, error: proposalError } = await supabase
+      .from('proposals')
+      .select('id, estimate_id, project_id')
+      .eq('id', proposalId)
+      .single()
+
+    if (proposalError || !proposal) {
+      throw new Error('Proposal not found')
+    }
+
+    // Verify project ownership
+    const { data: project, error: projectError } = await supabase
+      .from('projects')
+      .select('id, user_id')
+      .eq('id', proposal.project_id)
+      .single()
+
+    if (projectError || !project || project.user_id !== user.id) {
+      throw new Error('Unauthorized')
+    }
+
+    if (!proposal.estimate_id) {
+      throw new Error('Proposal has no linked estimate')
+    }
+
+    // Fetch line items with room exclusion filter
+    const { data: lineItems, error: lineItemsError } = await supabase
+      .from('estimate_line_items')
+      .select(`
+        client_price,
+        is_allowance,
+        description,
+        room_id,
+        rooms!estimate_line_items_room_id_fkey (
+          id,
+          is_active
+        )
+      `)
+      .eq('estimate_id', proposal.estimate_id)
+
+    if (lineItemsError) {
+      throw new Error(`Failed to fetch line items: ${lineItemsError.message}`)
+    }
+
+    // Calculate new total (only active rooms)
+    let newTotal = 0
+    for (const item of (lineItems || []) as any[]) {
+      const room = item.rooms as { id: string; is_active: boolean } | null
+      if (room && room.is_active === false) continue
+      newTotal += Number(item.client_price) || 0
+    }
+
+    // Update proposal total_price
+    const { error: updateError } = await supabase
+      .from('proposals')
+      .update({ total_price: newTotal })
+      .eq('id', proposalId)
+
+    if (updateError) {
+      throw new Error(`Failed to update proposal: ${updateError.message}`)
+    }
+
+    // Create audit event
+    await supabase
+      .from('proposal_events')
+      .insert({
+        proposal_id: proposalId,
+        event_type: 'revised',
+        metadata: {
+          action: 'regenerate_total',
+          new_total: newTotal,
+          regenerated_at: new Date().toISOString(),
+        },
+      })
+
+    return { success: true, newTotal }
+  } catch (error) {
+    console.error('Error regenerating proposal total:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }
+  }
+}

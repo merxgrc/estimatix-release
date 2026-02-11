@@ -13,13 +13,10 @@ export function Navbar() {
           <span className="text-xl font-bold">Estimatix</span>
         </Link>
 
-        {/* Desktop Navigation */}
+        {/* Desktop Navigation - Phase 1: Pricing link removed per PHASE_1_RELEASE_CHECKLIST.md */}
         <div className="hidden items-center space-x-6 md:flex">
           <Link href="#features" className="text-sm text-muted-foreground transition-colors hover:text-foreground">
             Features
-          </Link>
-          <Link href="#pricing" className="text-sm text-muted-foreground transition-colors hover:text-foreground">
-            Pricing
           </Link>
           <Link href="#faq" className="text-sm text-muted-foreground transition-colors hover:text-foreground">
             FAQ
