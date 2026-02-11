@@ -737,7 +737,7 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
             </span>
           </div>
           <Button
-            onClick={handleParseBlueprints}
+            onClick={() => handleParseBlueprints()}
             disabled={isParsing || selectedParseableCount === 0}
             size="sm"
           >
@@ -905,7 +905,7 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
             setActiveParseEstimateId(undefined)
             onBlueprintParsed?.()
           }}
-          onReparse={handleParseBlueprints}
+          onReparse={() => handleParseBlueprints()}
           isReparsing={isParsing}
         />
       )}
