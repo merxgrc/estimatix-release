@@ -300,16 +300,19 @@ export async function POST(req: NextRequest) {
         // PDF processing with 2-pass approach
         try {
           // Download PDF
+          console.log(`[Plans Parse] Downloading: uploads/${storagePath}`)
           const { data: fileData, error: downloadError } = await serviceSupabase.storage
             .from('uploads')
             .download(storagePath)
 
           if (downloadError || !fileData) {
+            console.error('[Plans Parse] Download failed:', downloadError?.message || 'No data returned')
             allWarnings.push(`Failed to download file: ${storagePath.split('/').pop()}`)
             continue
           }
 
           const buffer = Buffer.from(await fileData.arrayBuffer())
+          console.log(`[Plans Parse] Downloaded ${Math.round(buffer.length / 1024)}KB PDF`)
           
           // =====================================================
           // PASS 1: Document Map / Page Classification
@@ -378,6 +381,28 @@ export async function POST(req: NextRequest) {
                   allMissingInfo.push('Floor plan pages may be cover sheets, notes, or unclear images')
                 }
               } else {
+                // FALLBACK: use the Supabase public URL directly with vision AI
+                console.log('[Plans Parse] Local rendering failed, trying direct URL vision analysis')
+                try {
+                  const { data: { publicUrl } } = serviceSupabase.storage
+                    .from('uploads')
+                    .getPublicUrl(storagePath)
+                  
+                  if (publicUrl) {
+                    console.log(`[Plans Parse] Using public URL for vision: ${publicUrl.substring(0, 80)}...`)
+                    const imageResult = await analyzeImageForRoomsWithAI(publicUrl, openaiApiKey)
+                    if (imageResult.rooms.length > 0) {
+                      allRooms.push(...imageResult.rooms)
+                      allAssumptions.push(...imageResult.assumptions)
+                      allWarnings.push(...imageResult.warnings)
+                      allMissingInfo.push(...imageResult.missingInfo)
+                      allAssumptions.push('Analyzed document via public URL using vision AI')
+                      continue
+                    }
+                  }
+                } catch (urlVisionErr) {
+                  console.warn('[Plans Parse] URL-based vision also failed:', urlVisionErr)
+                }
                 allWarnings.push('Could not render PDF pages to images for vision analysis.')
               }
             } catch (visionError) {
