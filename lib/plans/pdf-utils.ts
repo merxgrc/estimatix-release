@@ -53,22 +53,16 @@ export interface PdfTypeDetection {
 
 let _PDFParse: any = null
 
-async function getPDFParseClass(): Promise<any> {
+function getPDFParseClass(): any {
   if (!_PDFParse) {
     try {
-      // Use dynamic import (works with ESM and Vercel's file tracing)
-      const mod = await import('pdf-parse')
-      _PDFParse = mod.PDFParse || (mod as any).default?.PDFParse
-      if (!_PDFParse) {
-        // Try require as fallback (CJS)
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const cjsMod = require('pdf-parse')
-        _PDFParse = cjsMod.PDFParse || cjsMod.default?.PDFParse
-      }
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require('pdf-parse')
+      _PDFParse = mod.PDFParse || mod.default?.PDFParse
       if (!_PDFParse) throw new Error('PDFParse class not found in pdf-parse module')
-      console.log('[PDF Utils] pdf-parse loaded successfully')
+      console.log('[PDF Utils] pdf-parse loaded successfully via require()')
     } catch (err) {
-      console.error('[PDF Utils] Failed to load pdf-parse:', err instanceof Error ? err.message : err)
+      console.error('[PDF Utils] Failed to load pdf-parse via require():', err instanceof Error ? err.message : err)
       throw err
     }
   }
@@ -98,7 +92,7 @@ export async function extractPdfPagesWithText(
   // PRIMARY: pdf-parse v2 (self-contained, no native deps needed)
   // ---------------------------------------------------------------
   try {
-    const PDFParse = await getPDFParseClass()
+    const PDFParse = getPDFParseClass()
     const parser = new PDFParse({ data: buffer })
 
     // Get page count
@@ -375,7 +369,7 @@ export function detectPdfType(
  */
 export async function getPdfPageCount(buffer: Buffer): Promise<number> {
   try {
-    const PDFParse = await getPDFParseClass()
+    const PDFParse = getPDFParseClass()
     const parser = new PDFParse({ data: buffer })
     const info = await parser.getInfo()
     await parser.destroy().catch(() => {})
@@ -408,7 +402,7 @@ export async function renderPdfPagesToImages(
   // PRIMARY: pdf-parse v2 getScreenshot (no native dependencies)
   // ---------------------------------------------------------------
   try {
-    const PDFParse = await getPDFParseClass()
+    const PDFParse = getPDFParseClass()
     const parser = new PDFParse({ data: buffer })
 
     const ssResult = await parser.getScreenshot({
