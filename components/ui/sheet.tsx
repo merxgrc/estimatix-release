@@ -12,8 +12,8 @@ const DrawerClose = Vaul.Drawer.Close
 
 const DrawerContent = React.forwardRef<
   React.ElementRef<typeof Vaul.Drawer.Content>,
-  React.ComponentPropsWithoutRef<typeof Vaul.Drawer.Content>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof Vaul.Drawer.Content> & { title?: string }
+>(({ className, children, title, ...props }, ref) => (
   <Vaul.Drawer.Portal>
     <Vaul.Drawer.Overlay className="fixed inset-0 z-50 bg-black/80" />
     <Vaul.Drawer.Content
@@ -24,6 +24,7 @@ const DrawerContent = React.forwardRef<
       )}
       {...props}
     >
+      <Vaul.Drawer.Title className="sr-only">{title || 'Drawer'}</Vaul.Drawer.Title>
       <div className="mx-auto mt-4 h-2 w-[100px] rounded-full bg-muted" />
       {children}
     </Vaul.Drawer.Content>

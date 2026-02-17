@@ -64,11 +64,16 @@ import { applyParsedResults, type ParsedRoomInput, type LineItemScaffoldInput } 
 interface ParsedRoom {
   id?: string
   name: string
+  level: string | null  // "Level 1", "Level 2", "Basement", etc. NULL = unknown
   type: string | null
   area_sqft: number | null
+  length_ft?: number | null
+  width_ft?: number | null
+  ceiling_height_ft?: number | null
   dimensions: string | null
   notes: string | null
   confidence: number
+  sheet_label?: string | null
 }
 
 interface LineItemScaffold {
@@ -272,6 +277,11 @@ function RoomCard({
           </div>
         )}
         <div className="flex flex-wrap gap-2 mt-1">
+          {room.level && (
+            <Badge variant="outline" className="text-xs font-medium">
+              {room.level}
+            </Badge>
+          )}
           {room.type && (
             <Badge variant="secondary" className="text-xs">
               {room.type}
@@ -482,8 +492,12 @@ export function BlueprintReviewDrawer({
     try {
       const roomInputs: ParsedRoomInput[] = rooms.map(r => ({
         name: r.name,
+        level: r.level || null,  // NULL = unknown; never fallback to "Level 1"
         type: r.type,
         area_sqft: r.area_sqft,
+        length_ft: r.length_ft ?? null,
+        width_ft: r.width_ft ?? null,
+        ceiling_height_ft: r.ceiling_height_ft ?? null,
         dimensions: r.dimensions,
         notes: r.notes,
         included: r.included

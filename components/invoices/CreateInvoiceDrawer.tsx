@@ -181,7 +181,7 @@ export function CreateInvoiceDrawer({ open, onOpenChange, projectId, tasks, onSu
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create Invoice</DialogTitle>
         </DialogHeader>
@@ -323,7 +323,7 @@ export function CreateInvoiceDrawer({ open, onOpenChange, projectId, tasks, onSu
               <CardTitle className="text-lg">Invoice Dates</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="issued-date">Issued Date</Label>
                   <Popover modal>

@@ -219,9 +219,20 @@ export default function ProjectDetailPage() {
     if (!projectId) return
     
     try {
-      console.log('[ProjectPage] Received estimate-updated event, refreshing estimates...')
+      console.log('[ProjectPage] Refreshing estimates...')
       const estimatesData = await db.getEstimates(projectId)
       setEstimates(estimatesData)
+      
+      // If no active estimate is set but estimates now exist, select the first one
+      // This handles the case where a blueprint parse auto-created an estimate
+      setActiveEstimateId(prev => {
+        if (!prev && estimatesData.length > 0) {
+          console.log('[ProjectPage] Auto-selecting newly created estimate:', estimatesData[0].id)
+          return estimatesData[0].id
+        }
+        return prev
+      })
+      
       console.log('[ProjectPage] Estimates refreshed:', estimatesData.length, 'estimates')
     } catch (err) {
       console.error('[ProjectPage] Error fetching estimates:', err)
@@ -529,7 +540,7 @@ export default function ProjectDetailPage() {
         <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden">
           <Sidebar />
           <div 
-            className="flex-1 min-w-0 flex items-center justify-center transition-all duration-200"
+            className="app-content flex-1 min-w-0 flex items-center justify-center transition-all duration-200"
             style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
           >
             <div className="text-center">
@@ -548,7 +559,7 @@ export default function ProjectDetailPage() {
         <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden">
           <Sidebar />
           <div 
-            className="flex-1 min-w-0 flex items-center justify-center p-6 transition-all duration-200"
+            className="app-content flex-1 min-w-0 flex items-center justify-center p-4 md:p-6 transition-all duration-200"
             style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
           >
             <Card className="max-w-xl w-full border-destructive">
@@ -706,8 +717,17 @@ export default function ProjectDetailPage() {
       
       console.log('Copilot response:', result)
       
-      // Update recentActions with executed actions from this turn (for next turn context)
+      // Log action results for debugging
       if (result.executedActions && Array.isArray(result.executedActions)) {
+        const failed = result.executedActions.filter((a: any) => !a.success)
+        const succeeded = result.executedActions.filter((a: any) => a.success)
+        if (failed.length > 0) {
+          console.error('[handleSendMessage] Failed actions:', failed)
+        }
+        if (succeeded.length > 0) {
+          console.log('[handleSendMessage] Successful actions:', succeeded.map((a: any) => a.action))
+        }
+        
         setRecentActions(prev => {
           // Keep only the last 5 actions to avoid context bloat
           const newActions = [...prev, ...result.executedActions]
@@ -802,20 +822,20 @@ export default function ProjectDetailPage() {
         <Sidebar />
 
         <div 
-          className="flex-1 min-w-0 transition-all duration-200"
+          className="app-content flex-1 min-w-0 transition-all duration-200"
           style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px`, marginRight: '0' }}
         >
           {/* Main content - add right margin on large screens to make room for fixed chat */}
           <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden lg:mr-[400px]">
             {/* Top Bar */}
             <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-            <div className="flex h-16 items-center justify-between px-4 md:px-6">
-              <div className="flex items-center gap-4">
-                <Button variant="ghost" size="sm" onClick={() => router.push('/projects')}>
-                  <ArrowLeft className="mr-2 h-4 w-4" />
-                  Back
+            <div className="flex h-auto min-h-[56px] md:h-16 items-center justify-between px-3 md:px-6 py-2 md:py-0 gap-2 flex-wrap md:flex-nowrap">
+              <div className="flex items-center gap-2 md:gap-4 min-w-0 flex-1">
+                <Button variant="ghost" size="sm" onClick={() => router.push('/projects')} className="min-h-[44px] md:min-h-0 shrink-0 px-2 md:px-3">
+                  <ArrowLeft className="h-4 w-4 md:mr-2" />
+                  <span className="hidden md:inline">Back</span>
                 </Button>
-                <div className="flex flex-col">
+                <div className="flex flex-col min-w-0 flex-1">
                   <EditableProjectTitle
                     title={project.title}
                     onSave={async (newTitle: string) => {
@@ -825,33 +845,34 @@ export default function ProjectDetailPage() {
                     variant="default"
                   />
                   {estimatorProfile && (
-                    <div className="text-xs text-muted-foreground mt-1">
+                    <div className="text-xs text-muted-foreground mt-1 truncate">
                       {estimatorProfile.full_name && (
                         <span>Estimator: {estimatorProfile.full_name}</span>
                       )}
                       {estimatorProfile.company_name && (
-                        <span className="ml-2">• {estimatorProfile.company_name}</span>
+                        <span className="ml-2 hidden sm:inline">• {estimatorProfile.company_name}</span>
                       )}
                     </div>
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 md:gap-2 shrink-0">
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleExportPdf}
                   disabled={isExportingPdf || !activeEstimateId}
+                  className="min-h-[44px] md:min-h-0"
                 >
                   {isExportingPdf ? (
                     <>
-                      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                      Generating...
+                      <div className="mr-1 md:mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      <span className="hidden sm:inline">Generating...</span>
                     </>
                   ) : (
                     <>
-                      <Download className="mr-2 h-4 w-4" />
-                      Export PDF
+                      <Download className="h-4 w-4 md:mr-2" />
+                      <span className="hidden sm:inline">Export PDF</span>
                     </>
                   )}
                 </Button>
@@ -860,9 +881,10 @@ export default function ProjectDetailPage() {
                     variant="default"
                     size="sm"
                     onClick={() => setIsCloseJobModalOpen(true)}
+                    className="min-h-[44px] md:min-h-0"
                   >
-                    <FileText className="mr-2 h-4 w-4" />
-                    Mark Job Complete
+                    <FileText className="h-4 w-4 md:mr-2" />
+                    <span className="hidden sm:inline">Mark Job Complete</span>
                   </Button>
                 )}
                 <Button
@@ -870,16 +892,14 @@ export default function ProjectDetailPage() {
                   size="sm"
                   onClick={handleDeleteProject}
                   disabled={deletingProject}
+                  className="min-h-[44px] md:min-h-0"
                 >
                   {deletingProject ? (
-                    <>
-                      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                      Deleting...
-                    </>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
                   ) : (
                     <>
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete Project
+                      <Trash2 className="h-4 w-4 md:mr-2" />
+                      <span className="hidden sm:inline">Delete</span>
                     </>
                   )}
                 </Button>
@@ -892,8 +912,8 @@ export default function ProjectDetailPage() {
           <main className="p-4 md:p-6 overflow-x-hidden">
             {/* Tab Navigation */}
             {/* Phase 1: Pricing and Selections tabs removed per PHASE_1_RELEASE_CHECKLIST.md */}
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full overflow-x-auto">
-              <TabsList className="w-full grid grid-cols-4 lg:grid-cols-8 gap-1">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+              <TabsList className="scrollable-tabs max-w-full md:w-full md:grid md:grid-cols-8 md:gap-1">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="estimate">Estimate</TabsTrigger>
                 <TabsTrigger value="rooms">Rooms</TabsTrigger>
@@ -957,9 +977,15 @@ export default function ProjectDetailPage() {
                       }))
                     }, 300)
                   }}
-                  onBlueprintParsed={() => {
-                    // Refresh estimates and rooms after blueprint parsing
-                    fetchEstimates()
+                  onBlueprintParsed={async () => {
+                    // Refresh estimates after blueprint parsing
+                    await fetchEstimates()
+                    // Notify EstimateTable + RoomsTab to refetch data
+                    // Small delay to ensure React state has settled after fetchEstimates
+                    setTimeout(() => {
+                      window.dispatchEvent(new Event('estimate-updated'))
+                      window.dispatchEvent(new Event('rooms-updated'))
+                    }, 200)
                   }}
                 />
               </TabsContent>
@@ -1003,7 +1029,7 @@ export default function ProjectDetailPage() {
 
         {/* Mobile Copilot Drawer */}
         <Drawer open={isCopilotOpen} onOpenChange={setIsCopilotOpen}>
-          <DrawerContent className="h-[calc(100vh-6rem)]">
+          <DrawerContent className="h-[calc(100vh-6rem)]" title="Copilot">
             <CopilotChat
               projectId={projectId}
               onSendMessage={handleSendMessage}

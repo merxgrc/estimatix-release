@@ -157,7 +157,7 @@ export function CreateContractDrawer({ open, onOpenChange, projectId, proposalId
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create Contract</DialogTitle>
         </DialogHeader>
@@ -168,7 +168,7 @@ export function CreateContractDrawer({ open, onOpenChange, projectId, proposalId
               <CardTitle className="text-lg">Project Dates</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="start-date">Approximate Start Date</Label>
                   <Popover modal>
@@ -265,7 +265,7 @@ export function CreateContractDrawer({ open, onOpenChange, projectId, proposalId
               <div className="space-y-3">
                 {paymentSchedule.map((item, idx) => (
                   <div key={idx} className="flex gap-2 items-start">
-                    <div className="flex-1 grid grid-cols-2 gap-2">
+                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <Input
                         value={item.milestone}
                         onChange={(e) => updatePaymentMilestone(idx, 'milestone', e.target.value)}

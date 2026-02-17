@@ -246,7 +246,7 @@ export default function RecordPage() {
         <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden">
           <Sidebar />
           <div 
-            className="flex-1 min-w-0 flex items-center justify-center p-6 transition-all duration-200"
+            className="app-content flex-1 min-w-0 flex items-center justify-center p-4 md:p-6 transition-all duration-200"
             style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
           >
             <Card className="max-w-xl w-full">
@@ -274,7 +274,7 @@ export default function RecordPage() {
         <Sidebar />
 
         <div 
-          className="flex-1 min-w-0 transition-all duration-200"
+          className="app-content flex-1 min-w-0 transition-all duration-200"
           style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
         >
           {/* Top Bar */}

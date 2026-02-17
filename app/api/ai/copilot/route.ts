@@ -6,6 +6,7 @@ import { createServerClient, createServiceRoleClient, requireAuth } from '@/lib/
 // - matchTask, applyPricing removed - copilot must NOT enrich actions with pricing
 // - fuzzyScore kept for room name matching only
 import { fuzzyScore } from '@/lib/pricing/fuzzy'
+import { isAreaBasedItem } from '@/lib/area-mapping'
 
 export const runtime = 'nodejs' // Disable Edge runtime for OpenAI API compatibility
 
@@ -334,32 +335,41 @@ export async function POST(req: NextRequest) {
     if (existingEstimate) {
       estimateId = existingEstimate.id
     } else {
-      // Create a new estimate
+      // Create a new estimate — only required columns
       const { data: newEstimate, error: createError } = await supabase
         .from('estimates')
         .insert({
           project_id: projectId,
-          json_data: { line_items: [], spec_sections: [] }
+          user_id: user.id,
+          title: 'Estimate',
+          status: 'draft',
         })
         .select('id')
         .single()
 
       if (createError || !newEstimate) {
+        console.error('[Copilot] Failed to create estimate:', createError)
         return NextResponse.json(
-          { error: 'Failed to create estimate' },
+          { error: `Failed to create estimate: ${createError?.message || 'unknown'}` },
           { status: 500 }
         )
       }
       estimateId = newEstimate.id
+      console.log('[Copilot] Created new estimate:', estimateId)
     }
 
     // Fetch existing rooms for the project
-    const { data: rooms } = await supabase
+    // Gracefully handle missing columns (project_id, is_active) if migration 033 not run
+    const { data: rooms, error: roomsError } = await supabase
       .from('rooms')
       .select('id, name, type, is_active')
       .eq('project_id', projectId)
       .eq('is_active', true)
       .order('name', { ascending: true })
+    
+    if (roomsError) {
+      console.warn('[Copilot] Could not fetch rooms (migration may not be applied):', roomsError.message)
+    }
 
     // Build system prompt for the AI
     // Note: recentActions will be populated from previous turns by the frontend
@@ -398,6 +408,7 @@ export async function POST(req: NextRequest) {
 
     // Execute actions (NO pricing - all pricing fields stored as NULL)
     let executedActions: Array<{ type: string; success: boolean; id?: string; error?: string }> = []
+    let actionExecutionError: string | null = null
     try {
       executedActions = await executeActions(
         aiResponse.actions, // Use actions directly - NO enrichment
@@ -406,10 +417,17 @@ export async function POST(req: NextRequest) {
         user.id,
         supabase
       )
+      console.log('[Copilot] Action results:', JSON.stringify(executedActions))
     } catch (actionError) {
-      console.error('Error executing actions:', actionError)
-      // Continue even if action execution fails - we still want to save the conversation
-      executedActions = []
+      const errMsg = actionError instanceof Error ? actionError.message : String(actionError)
+      console.error('[Copilot] Error executing actions:', errMsg, actionError)
+      actionExecutionError = errMsg
+      // Still continue — save conversation and return the error info
+      executedActions = aiResponse.actions.map((a: any) => ({
+        type: a.type,
+        success: false,
+        error: errMsg
+      }))
     }
 
     // Save user message to chat_messages
@@ -447,7 +465,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       response_text: aiResponse.response_text,
       actions: aiResponse.actions, // Actions WITHOUT pricing - all pricing fields are NULL
-      executedActions: executedActions // Results of action execution (success/error per action)
+      executedActions: executedActions, // Results of action execution (success/error per action)
+      ...(actionExecutionError ? { actionError: actionExecutionError } : {})
     })
 
   } catch (error) {
@@ -531,7 +550,8 @@ async function resolveRoomName(
 async function createRoom(
   name: string,
   projectId: string,
-  supabase: any
+  supabase: any,
+  level?: string | null
 ): Promise<string | null> {
   try {
     const { data: newRoom, error } = await supabase
@@ -539,6 +559,8 @@ async function createRoom(
       .insert({
         project_id: projectId,
         name: name.trim(),
+        level: level || null,        // NULL = unknown level
+        level_source: level ? 'manual' : null,
         source: 'ai_chat',
         is_active: true,
       })
@@ -1222,6 +1244,15 @@ async function executeActions(
 
           // Phase 1: NO pricing - all pricing fields stored as NULL
           // Users enter prices manually in the estimate table UI
+
+          // Determine if this is an area-based item for auto-quantity
+          const areaBasedCheck = isAreaBasedItem({
+            cost_code: data.cost_code || null,
+            unit: data.unit || null,
+            description: data.description || null,
+            category: data.category || null,
+          })
+
           const insertData: any = {
             estimate_id: estimateId,
             project_id: projectId,
@@ -1230,8 +1261,9 @@ async function executeActions(
             cost_code: data.cost_code || null, // Accept cost_code from AI but don't validate against pricing library
             room_name: roomName, // Keep room_name for backward compatibility
             room_id: roomId, // Use resolved room_id
-            quantity: data.quantity || 1,
-            unit: data.unit || null,
+            quantity: areaBasedCheck ? null : (data.quantity || 1),
+            unit: areaBasedCheck ? 'SQFT' : (data.unit || null),
+            calc_source: areaBasedCheck ? 'room_dimensions' : 'manual',
             // Phase 1: ALL pricing fields are NULL - manual entry only
             labor_cost: null,
             material_cost: null,
@@ -1334,7 +1366,7 @@ async function executeActions(
             break
           }
 
-          const roomId = await createRoom(data.name.trim(), projectId, supabase)
+          const roomId = await createRoom(data.name.trim(), projectId, supabase, data.level || null)
           
           if (!roomId) {
             results.push({ type: 'add_room', success: false, error: 'Failed to create room' })
@@ -1396,22 +1428,17 @@ async function executeActions(
             break
           }
 
-          // Hide the room (set is_active = false)
+          // Exclude room from scope (set is_in_scope = false, is_active = false for backward compat)
+          // Line items remain in DB but are excluded from all total computations
           const { error: updateError } = await supabase
             .from('rooms')
-            .update({ is_active: false })
+            .update({ is_in_scope: false, is_active: false })
             .eq('id', matchedRoom.id)
 
           if (updateError) {
             results.push({ type: 'hide_room', success: false, error: `Failed to hide room: ${updateError.message}` })
             break
           }
-
-          // Cascade: Hide all line items linked to this room
-          await supabase
-            .from('estimate_line_items')
-            .update({ is_active: false })
-            .eq('room_id', matchedRoom.id)
 
           results.push({ type: 'hide_room', success: true, id: matchedRoom.id })
           break

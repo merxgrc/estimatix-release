@@ -104,7 +104,7 @@ export default function ProjectsPage() {
         <Sidebar />
 
         <div 
-          className="flex-1 min-w-0 transition-all duration-200"
+          className="app-content flex-1 min-w-0 transition-all duration-200"
           style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
         >
         {/* Top Bar */}

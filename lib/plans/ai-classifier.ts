@@ -3,11 +3,13 @@
  * 
  * PASS 1: Document Map / Page Classification
  * - Classifies pages into types
+ * - Detects building level per sheet (Level 1, Level 2, Basement, etc.)
  * - Identifies pages of interest for deep parsing
  * 
- * PASS 2: Deep Parse
- * - Extracts rooms from relevant pages
- * - Generates line item scaffolds
+ * PASS 2: Deep Parse (per-sheet, level-aware)
+ * - Extracts rooms from each relevant sheet with its detected level
+ * - Uses deterministic naming: "Bathroom 1 – Level 2"
+ * - Parses dimensions into length_ft / width_ft
  * - NO PRICING - all pricing fields are null
  */
 
@@ -24,6 +26,15 @@ import {
   ROOM_RELEVANT_PAGE_TYPES,
 } from './schemas'
 
+import {
+  detectLevelFromText,
+  extractSheetTitle,
+  postProcessRooms,
+  deduplicateAcrossSheets,
+  type SheetInfo,
+  type SheetRoomResult,
+} from './room-processor'
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -39,9 +50,22 @@ interface ExtractRoomsInput {
   apiKey: string
 }
 
+/** New: per-sheet extraction input */
+interface ExtractRoomsPerSheetInput {
+  sheet: SheetInfo
+  pageText: string
+  apiKey: string
+}
+
 interface GenerateLineItemsInput {
   rooms: ExtractedRoom[]
   apiKey: string
+}
+
+/** Enriched classification with level detection */
+export interface EnrichedPageClassification extends PageClassification {
+  detectedLevel: string
+  sheetTitle: string
 }
 
 // =============================================================================
@@ -300,11 +324,278 @@ export function selectPagesForDeepParse(
 }
 
 // =============================================================================
-// PASS 2: Deep Room Extraction
+// Level Enrichment for Classifications
 // =============================================================================
 
 /**
- * Extract rooms from selected pages using GPT-4o
+ * Enrich page classifications with detected building level and sheet title.
+ * Uses text content heuristics to detect "Level 1", "Basement", etc.
+ */
+export function enrichClassificationsWithLevel(
+  classifications: PageClassification[],
+  pages: Array<{ pageNumber: number; text: string }>
+): EnrichedPageClassification[] {
+  const pageTextMap = new Map(pages.map(p => [p.pageNumber, p.text]))
+
+  return classifications.map(c => {
+    const pageText = pageTextMap.get(c.pageNumber) || ''
+    const sheetTitle = extractSheetTitle(pageText)
+    const detectedLevel = detectLevelFromText(sheetTitle, pageText)
+
+    return {
+      ...c,
+      detectedLevel,
+      sheetTitle,
+    }
+  })
+}
+
+/**
+ * Group classified pages by detected level for per-sheet extraction.
+ * Returns SheetInfo objects for each floor_plan page.
+ */
+export function groupPagesByLevel(
+  enriched: EnrichedPageClassification[]
+): SheetInfo[] {
+  return enriched
+    .filter(c => 
+      c.type === 'floor_plan' || 
+      c.hasRoomLabels || 
+      c.type === 'room_schedule'
+    )
+    .map(c => ({
+      pageNumber: c.pageNumber,
+      sheetTitle: c.sheetTitle,
+      detectedLevel: c.detectedLevel,
+      classification: c.type,
+      confidence: c.confidence,
+    }))
+}
+
+// =============================================================================
+// PASS 2: Deep Room Extraction (per-sheet, level-aware)
+// =============================================================================
+
+/**
+ * Extract rooms from a SINGLE sheet/page with level context.
+ * This is the core of deterministic parsing: one sheet → one level → rooms.
+ *
+ * Key differences from legacy extractRoomsFromPagesWithAI:
+ * 1. Processes one sheet at a time (not all pages merged)
+ * 2. Tells the AI what level the sheet is
+ * 3. Instructs AI to report EXACT room count, no merging
+ * 4. Post-processes with deterministic naming
+ */
+export async function extractRoomsFromSheetWithAI(
+  input: ExtractRoomsPerSheetInput
+): Promise<SheetRoomResult> {
+  const { sheet, pageText, apiKey } = input
+
+  if (!pageText || pageText.trim().length < 20) {
+    return {
+      sheet,
+      rooms: [],
+    }
+  }
+
+  const truncatedText = pageText.length > 20000
+    ? pageText.slice(0, 20000) + '\n[... truncated ...]'
+    : pageText
+
+  const systemPrompt = `You are an expert construction estimator analyzing a SINGLE floor plan sheet.
+
+THIS SHEET IS: "${sheet.sheetTitle}"
+BUILDING LEVEL: ${sheet.detectedLevel}
+
+Extract ALL rooms and spaces shown on THIS sheet. For EACH distinct room or space:
+1. name: Room name EXACTLY as labeled on the plan. Expand abbreviations (MBR→Master Bedroom, BA→Bathroom, BR→Bedroom, KIT→Kitchen, LR→Living Room, DR→Dining Room, FR→Family Room, GR→Great Room, WIC→Walk-in Closet, PWDR→Powder Room).
+2. type: One of: bedroom, bathroom, kitchen, living, dining, garage, closet, utility, laundry, hallway, foyer, office, basement, attic, deck, patio, porch, mudroom, pantry, storage, mechanical, other
+3. area_sqft: Square footage if shown (number or null)
+4. dimensions: Dimension string if shown (e.g. "12'-0\\" x 14'-6\\"") or null
+5. notes: Special notes visible on plan
+6. confidence: 0-100
+
+Return JSON:
+{
+  "rooms": [
+    { "name": "Master Bedroom", "type": "bedroom", "area_sqft": 250, "dimensions": "12'-0\\" x 20'-0\\"", "notes": null, "confidence": 95 }
+  ],
+  "room_count_by_type": { "bedroom": 3, "bathroom": 2, "kitchen": 1 },
+  "assumptions": [],
+  "missingInfo": [],
+  "warnings": []
+}
+
+CRITICAL RULES:
+- Report EVERY distinct room/space shown. If the plan shows 3 bedrooms, return 3 separate bedroom entries.
+- Do NOT merge rooms. "Bathroom" appearing twice means TWO bathrooms — return both.
+- If two rooms have the same label (e.g. two rooms labeled "BEDROOM"), return BOTH as separate entries.
+- Include closets, pantries, walk-in closets, powder rooms, laundry, utility, storage.
+- Include hallways only if they are labeled as a room on the plan.
+- Use the room name from the plan. Do NOT invent creative names — use exactly what is labeled.
+- If a room label is unclear, use the type with a number (e.g. "Bedroom 1", "Bathroom 2").
+- DO NOT include any pricing information.
+- The "room_count_by_type" field is for verification — it MUST match the actual rooms array length per type.`
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Extract all rooms from this ${sheet.detectedLevel} floor plan sheet:\n\n${truncatedText}` }
+        ],
+        temperature: 0.1, // Very low temp for determinism
+        max_tokens: 4000,
+        response_format: { type: 'json_object' },
+      }),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      console.error(`[Pass2-Sheet] Room extraction API error for page ${sheet.pageNumber}:`, errorData)
+      return { sheet, rooms: [] }
+    }
+
+    const result = await response.json()
+    const content = result.choices?.[0]?.message?.content
+
+    if (!content) {
+      return { sheet, rooms: [] }
+    }
+
+    const parsed = JSON.parse(content)
+
+    // Validate rooms with Zod
+    const rawRooms: ExtractedRoom[] = (parsed.rooms || [])
+      .map((r: Record<string, unknown>) => {
+        const validated = ExtractedRoomSchema.safeParse({
+          name: (r.name as string) || 'Unnamed Room',
+          level: sheet.detectedLevel,
+          type: normalizeRoomType(r.type as string),
+          area_sqft: typeof r.area_sqft === 'number' ? r.area_sqft : null,
+          dimensions: r.dimensions || null,
+          notes: r.notes || null,
+          confidence: typeof r.confidence === 'number' ? r.confidence : 50,
+        })
+
+        return validated.success ? validated.data : null
+      })
+      .filter(Boolean) as ExtractedRoom[]
+
+    // Verify room count consistency
+    if (parsed.room_count_by_type && typeof parsed.room_count_by_type === 'object') {
+      const expectedTotal = Object.values(parsed.room_count_by_type as Record<string, number>)
+        .reduce((sum: number, n) => sum + (typeof n === 'number' ? n : 0), 0)
+      if (rawRooms.length < expectedTotal) {
+        console.warn(
+          `[Pass2-Sheet] Room count mismatch on page ${sheet.pageNumber}: ` +
+          `AI reported ${expectedTotal} in counts but returned ${rawRooms.length} rooms`
+        )
+      }
+    }
+
+    // Post-process: deterministic naming + dimension parsing
+    const processedRooms = postProcessRooms(rawRooms, sheet.detectedLevel)
+
+    // Stamp each room with the sheet label for provenance
+    const roomsWithSheet = processedRooms.map(r => ({
+      ...r,
+      sheet_label: sheet.sheetTitle || null,
+    }))
+
+    return {
+      sheet,
+      rooms: roomsWithSheet,
+    }
+  } catch (error) {
+    console.error(`[Pass2-Sheet] Room extraction error for page ${sheet.pageNumber}:`, error)
+    return { sheet, rooms: [] }
+  }
+}
+
+/**
+ * Extract rooms from ALL relevant sheets, one at a time.
+ * This is the main Phase 1 entry point for room extraction.
+ *
+ * Flow:
+ * 1. For each floor_plan sheet, call extractRoomsFromSheetWithAI
+ * 2. Deduplicate across sheets (same room on overlapping pages)
+ * 3. Return flat array of deterministically named rooms
+ */
+export async function extractRoomsPerSheet(input: {
+  sheets: SheetInfo[]
+  pages: Array<{ pageNumber: number; text: string }>
+  apiKey: string
+}): Promise<{
+  rooms: ExtractedRoom[]
+  sheetResults: SheetRoomResult[]
+  assumptions: string[]
+  warnings: string[]
+  missingInfo: string[]
+}> {
+  const { sheets, pages, apiKey } = input
+  const pageTextMap = new Map(pages.map(p => [p.pageNumber, p.text]))
+
+  const allSheetResults: SheetRoomResult[] = []
+  const allAssumptions: string[] = []
+  const allWarnings: string[] = []
+  const allMissingInfo: string[] = []
+
+  // Process each sheet sequentially (could parallelize later)
+  for (const sheet of sheets) {
+    const pageText = pageTextMap.get(sheet.pageNumber) || ''
+
+    if (pageText.trim().length < 20) {
+      allWarnings.push(`Page ${sheet.pageNumber} (${sheet.sheetTitle}): insufficient text for extraction`)
+      continue
+    }
+
+    console.log(`[Pass2-Sheet] Extracting rooms from page ${sheet.pageNumber}: "${sheet.sheetTitle}" → ${sheet.detectedLevel}`)
+
+    const result = await extractRoomsFromSheetWithAI({
+      sheet,
+      pageText,
+      apiKey,
+    })
+
+    allSheetResults.push(result)
+
+    if (result.rooms.length > 0) {
+      allAssumptions.push(
+        `Page ${sheet.pageNumber} (${sheet.sheetTitle}): found ${result.rooms.length} rooms on ${sheet.detectedLevel}`
+      )
+    } else {
+      allWarnings.push(
+        `Page ${sheet.pageNumber} (${sheet.sheetTitle}): no rooms detected`
+      )
+    }
+  }
+
+  // Deduplicate across sheets (same room on overlapping pages)
+  const deduped = deduplicateAcrossSheets(allSheetResults)
+
+  return {
+    rooms: deduped,
+    sheetResults: allSheetResults,
+    assumptions: allAssumptions,
+    warnings: allWarnings,
+    missingInfo: allMissingInfo,
+  }
+}
+
+// =============================================================================
+// PASS 2: Legacy Room Extraction (kept for backward compatibility + fallback)
+// =============================================================================
+
+/**
+ * Extract rooms from selected pages using GPT-4o (legacy: all pages merged).
+ * Kept as fallback when per-sheet extraction isn't possible (e.g. no classifications).
  */
 export async function extractRoomsFromPagesWithAI(
   input: ExtractRoomsInput
@@ -336,28 +627,29 @@ export async function extractRoomsFromPagesWithAI(
 Extract ALL rooms and spaces from the document. For each room:
 1. name: Room name as shown (expand abbreviations: MBR→Master Bedroom, BA→Bathroom)
 2. type: One of: bedroom, bathroom, kitchen, living, dining, garage, closet, utility, laundry, hallway, foyer, office, basement, attic, deck, patio, porch, mudroom, pantry, storage, mechanical, other
-3. area_sqft: Square footage if shown (number only, or null)
-4. dimensions: Dimensions if shown (e.g., "12'-0\" x 14'-6\"" or null)
-5. notes: Special notes about the room
-6. confidence: 0-100 confidence this is a real, distinct room
+3. level: Building level this room is on. Detect from sheet title or context. Use canonical names: "Level 1", "Level 2", "Basement", "Garage", "Attic".
+4. area_sqft: Square footage if shown (number only, or null)
+5. dimensions: Dimensions if shown (e.g., "12'-0\" x 14'-6\"" or null)
+6. notes: Special notes about the room
+7. confidence: 0-100 confidence this is a real, distinct room
 
 Return JSON:
 {
   "rooms": [
-    { "name": "Master Bedroom", "type": "bedroom", "area_sqft": 250, "dimensions": "12'-0\" x 20'-0\"", "notes": null, "confidence": 95 }
+    { "name": "Master Bedroom", "level": "Level 1", "type": "bedroom", "area_sqft": 250, "dimensions": "12'-0\" x 20'-0\"", "notes": null, "confidence": 95 }
   ],
-  "assumptions": ["Assumed 'BR' means Bedroom", "Combined duplicate room entries"],
-  "missingInfo": ["Kitchen dimensions not visible", "Basement not included"],
-  "warnings": ["Some room labels unclear", "Page quality affects accuracy"]
+  "assumptions": ["Assumed 'BR' means Bedroom"],
+  "missingInfo": ["Kitchen dimensions not visible"],
+  "warnings": ["Some room labels unclear"]
 }
 
-RULES:
+CRITICAL RULES:
 - Extract ALL distinct rooms/spaces (bedrooms, bathrooms, closets, pantries, etc.)
+- If plan shows 3 bathrooms, return 3 separate entries — NEVER merge.
 - Use clear, professional names (expand abbreviations)
 - Include master closets, walk-in closets, pantries as separate rooms
-- Don't duplicate rooms that appear on multiple pages
+- DETECT the building level from page context (e.g. "SECOND FLOOR PLAN" → "Level 2")
 - Set lower confidence for unclear or inferred rooms
-- List assumptions, missing info, and warnings
 - DO NOT include any pricing information`
 
   try {
@@ -373,7 +665,7 @@ RULES:
           { role: 'system', content: systemPrompt },
           { role: 'user', content: `Extract all rooms from these ${pageNumbers.length} pages:\n\n${truncatedText}` }
         ],
-        temperature: 0.3,
+        temperature: 0.1,
         max_tokens: 4000,
         response_format: { type: 'json_object' },
       }),
@@ -409,6 +701,7 @@ RULES:
       .map((r: Record<string, unknown>) => {
         const validated = ExtractedRoomSchema.safeParse({
           name: r.name || 'Unnamed Room',
+          level: r.level || 'Level 1',
           type: normalizeRoomType(r.type as string),
           area_sqft: typeof r.area_sqft === 'number' ? r.area_sqft : null,
           dimensions: r.dimensions || null,
@@ -610,24 +903,28 @@ export async function analyzeImageForRoomsWithAI(
 
 Look at the floor plan image and extract ALL rooms and spaces you can identify.
 For each room:
-1. name: Room name as shown or inferred (expand abbreviations)
-2. type: bedroom, bathroom, kitchen, living, dining, garage, closet, utility, laundry, hallway, foyer, office, basement, attic, deck, patio, porch, mudroom, pantry, storage, mechanical, other
-3. area_sqft: Estimated square footage if determinable (or null)
-4. dimensions: Dimensions if shown (or null)
-5. notes: Any relevant notes
-6. confidence: 0-100 confidence
+1. name: Room name EXACTLY as labeled on the plan (expand abbreviations: MBR→Master Bedroom, BA→Bathroom, BR→Bedroom)
+2. level: Detect the building level from the sheet title or context. Use: "Level 1", "Level 2", "Basement", "Garage", "Attic". Default "Level 1" if unclear.
+3. type: bedroom, bathroom, kitchen, living, dining, garage, closet, utility, laundry, hallway, foyer, office, basement, attic, deck, patio, porch, mudroom, pantry, storage, mechanical, other
+4. area_sqft: Estimated square footage if determinable (or null)
+5. dimensions: Dimensions if shown (or null)
+6. notes: Any relevant notes
+7. confidence: 0-100 confidence
 
 Return JSON:
 {
-  "rooms": [...],
+  "rooms": [
+    { "name": "Master Bedroom", "level": "Level 1", "type": "bedroom", "area_sqft": 250, "dimensions": "12' x 20'", "notes": null, "confidence": 90 }
+  ],
   "assumptions": ["List assumptions made"],
   "missingInfo": ["Information that couldn't be determined"],
   "warnings": ["Any issues or quality concerns"]
 }
 
-RULES:
-- Identify all distinct rooms/spaces visible
-- Use clear, professional names
+CRITICAL RULES:
+- Report EVERY distinct room/space visible. If you see 3 bedrooms, return 3 entries.
+- Do NOT merge rooms with the same type — they are separate spaces.
+- Use the name from the plan. If unclear, use type with number: "Bedroom 1", "Bathroom 2".
 - Include closets, pantries, laundry rooms
 - Note if image quality affects analysis
 - DO NOT include any pricing information`
@@ -680,11 +977,12 @@ RULES:
 
     const parsed = JSON.parse(content)
     
-    // Validate rooms
+    // Validate rooms with level
     const validatedRooms: ExtractedRoom[] = (parsed.rooms || [])
       .map((r: Record<string, unknown>) => {
         const validated = ExtractedRoomSchema.safeParse({
           name: r.name || 'Unnamed Room',
+          level: r.level || 'Level 1',
           type: normalizeRoomType(r.type as string),
           area_sqft: typeof r.area_sqft === 'number' ? r.area_sqft : null,
           dimensions: r.dimensions || null,
@@ -696,8 +994,23 @@ RULES:
       })
       .filter(Boolean) as ExtractedRoom[]
 
+    // Post-process with deterministic naming
+    // Group by level, apply naming per level
+    const roomsByLevel = new Map<string, ExtractedRoom[]>()
+    for (const room of validatedRooms) {
+      const level = room.level || 'Unknown'
+      const existing = roomsByLevel.get(level) || []
+      existing.push(room)
+      roomsByLevel.set(level, existing)
+    }
+
+    const processedRooms: ExtractedRoom[] = []
+    for (const [level, rooms] of roomsByLevel) {
+      processedRooms.push(...postProcessRooms(rooms, level))
+    }
+
     return {
-      rooms: validatedRooms,
+      rooms: processedRooms,
       assumptions: Array.isArray(parsed.assumptions) ? parsed.assumptions : [],
       missingInfo: Array.isArray(parsed.missingInfo) ? parsed.missingInfo : [],
       warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
@@ -733,30 +1046,35 @@ export async function analyzeBase64ImagesForRooms(
   const systemPrompt = `You are an expert construction estimator analyzing floor plan images from architectural blueprints.
 
 Look at each floor plan image and extract ALL rooms and spaces you can identify.
+
+FIRST: Determine the building level for EACH page from the sheet title, header, or context.
+Use canonical level names: "Level 1", "Level 2", "Basement", "Garage", "Attic". Default to "Level 1".
+
 For each room:
-1. name: Room name as shown or inferred (expand abbreviations like "BR" to "Bedroom", "BA" to "Bathroom")
-2. type: bedroom, bathroom, kitchen, living, dining, garage, closet, utility, laundry, hallway, foyer, office, basement, attic, deck, patio, porch, mudroom, pantry, storage, mechanical, other
-3. area_sqft: Estimated square footage if dimensions are shown (calculate from dimensions, or null)
-4. dimensions: Dimensions if shown (e.g., "12'-0\" x 14'-6\"" or null)
-5. notes: Any relevant notes about finishes, features
-6. confidence: 0-100 confidence in identification
+1. name: Room name EXACTLY as labeled on the plan (expand abbreviations: BR→Bedroom, BA→Bathroom, MBR→Master Bedroom, KIT→Kitchen)
+2. level: Building level this room is on
+3. type: bedroom, bathroom, kitchen, living, dining, garage, closet, utility, laundry, hallway, foyer, office, basement, attic, deck, patio, porch, mudroom, pantry, storage, mechanical, other
+4. area_sqft: Square footage if determinable (calculate from dimensions, or null)
+5. dimensions: Dimension string if shown (e.g. "12'-0\\" x 14'-6\\"") or null
+6. notes: Any relevant notes about finishes, features
+7. confidence: 0-100
 
 Return JSON:
 {
   "rooms": [
-    { "name": "Primary Bedroom", "type": "bedroom", "area_sqft": 180, "dimensions": "12' x 15'", "notes": "Walk-in closet", "confidence": 90 },
-    { "name": "Kitchen", "type": "kitchen", "area_sqft": 144, "dimensions": "12' x 12'", "notes": "Island layout", "confidence": 85 }
+    { "name": "Primary Bedroom", "level": "Level 1", "type": "bedroom", "area_sqft": 180, "dimensions": "12' x 15'", "notes": "Walk-in closet", "confidence": 90 },
+    { "name": "Kitchen", "level": "Level 1", "type": "kitchen", "area_sqft": 144, "dimensions": "12' x 12'", "notes": "Island layout", "confidence": 85 }
   ],
-  "assumptions": ["Interpreted from multiple floor plan pages", "Room dimensions estimated where not clearly labeled"],
-  "missingInfo": ["Second floor plans not visible"],
+  "assumptions": [],
+  "missingInfo": [],
   "warnings": []
 }
 
-RULES:
-- Identify all distinct rooms/spaces visible across all images
+CRITICAL RULES:
+- Report EVERY distinct room/space visible across all images. If you see 5 bathrooms, return 5.
+- Do NOT merge rooms — each is a separate space even if the same type.
+- Use names from the plan. If unclear, use type with number: "Bedroom 1", "Bathroom 2".
 - Include closets, pantries, laundry rooms, garages
-- Expand abbreviations to full names
-- If same room appears on multiple pages, include once
 - DO NOT include any pricing information`
 
   try {
@@ -819,11 +1137,12 @@ RULES:
 
     const parsed = JSON.parse(responseContent)
     
-    // Validate rooms
+    // Validate rooms with level
     const validatedRooms: ExtractedRoom[] = (parsed.rooms || [])
       .map((r: Record<string, unknown>) => {
         const validated = ExtractedRoomSchema.safeParse({
-          name: r.name,
+          name: r.name || 'Unnamed Room',
+          level: r.level || 'Level 1',
           type: r.type || 'other',
           area_sqft: r.area_sqft,
           dimensions: r.dimensions || null,
@@ -835,8 +1154,22 @@ RULES:
       })
       .filter(Boolean) as ExtractedRoom[]
 
+    // Post-process with deterministic naming per level
+    const roomsByLevel = new Map<string, ExtractedRoom[]>()
+    for (const room of validatedRooms) {
+      const level = room.level || 'Unknown'
+      const existing = roomsByLevel.get(level) || []
+      existing.push(room)
+      roomsByLevel.set(level, existing)
+    }
+
+    const processedRooms: ExtractedRoom[] = []
+    for (const [level, rooms] of roomsByLevel) {
+      processedRooms.push(...postProcessRooms(rooms, level))
+    }
+
     return {
-      rooms: validatedRooms,
+      rooms: processedRooms,
       assumptions: Array.isArray(parsed.assumptions) ? parsed.assumptions : ['Analyzed from rendered PDF pages'],
       missingInfo: Array.isArray(parsed.missingInfo) ? parsed.missingInfo : [],
       warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],

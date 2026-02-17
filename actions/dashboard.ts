@@ -29,12 +29,19 @@ export async function getEstimationAccuracy() {
     }
 
     // For each project, calculate estimated vs actual
+    // Filters out line items from rooms that are excluded from scope
     const accuracyData = await Promise.all(
       projects.map(async (project) => {
-        // Get estimated total from line items
+        // Fetch line items WITH room scope join to filter excluded rooms
         const { data: lineItems, error: itemsError } = await supabase
           .from('estimate_line_items')
-          .select('direct_cost, client_price')
+          .select(`
+            direct_cost, client_price, room_id,
+            rooms!estimate_line_items_room_id_fkey (
+              id,
+              is_in_scope
+            )
+          `)
           .eq('project_id', project.id)
           .eq('is_active', true)
 
@@ -43,25 +50,23 @@ export async function getEstimationAccuracy() {
           return null
         }
 
-        const estimatedTotal = lineItems?.reduce((sum, item) => sum + (Number(item.client_price) || 0), 0) || 0
+        // Only include items from in-scope rooms (or items without a room)
+        let estimatedTotal = 0
+        let actualTotal = 0
 
-        // Get actual total from user_cost_library (actuals saved when closing job)
-        // We need to sum up actuals that were saved for this project
-        // Since we don't have a direct link, we'll use the most recent actuals for the same cost codes
-        // This is a simplified approach - in production, you might want to link actuals to projects
-        
-        // For now, we'll calculate from the line items' direct_cost (which should reflect actuals if job was closed)
-        // Actually, when a job is closed, the actuals are saved to user_cost_library but the line items aren't updated
-        // So we need a different approach - maybe store project_id in user_cost_library when closing?
-        
-        // Simplified: Use the estimated direct_cost as a proxy (this isn't perfect but works for the widget)
-        const actualTotal = lineItems?.reduce((sum, item) => sum + (Number(item.direct_cost) || 0), 0) || 0
+        for (const item of (lineItems || []) as any[]) {
+          const room = item.rooms as { id: string; is_in_scope: boolean } | null
+          if (room && room.is_in_scope === false) continue // Skip excluded rooms
+
+          estimatedTotal += Number(item.client_price) || 0
+          actualTotal += Number(item.direct_cost) || 0
+        }
 
         return {
           project_id: project.id,
           project_title: project.title,
           estimated_total: estimatedTotal,
-          actual_total: actualTotal, // This will be updated when we link actuals properly
+          actual_total: actualTotal,
           variance_percent: estimatedTotal > 0 
             ? ((actualTotal - estimatedTotal) / estimatedTotal) * 100 
             : 0,

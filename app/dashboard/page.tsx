@@ -20,7 +20,7 @@ export default function DashboardPage() {
       <div className="flex min-h-screen w-full max-w-[100vw] overflow-x-hidden">
         <Sidebar />
         <div 
-          className="flex-1 min-w-0 p-6 transition-all duration-200"
+          className="app-content flex-1 min-w-0 p-4 md:p-6 transition-all duration-200"
           style={{ marginLeft: `${isCollapsed ? 60 : sidebarWidth}px` }}
         >
           <div className="max-w-7xl mx-auto space-y-6 w-full">
