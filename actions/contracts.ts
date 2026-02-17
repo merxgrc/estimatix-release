@@ -94,7 +94,7 @@ export async function createContractFromProposal(
 
 /**
  * Recalculate and update a contract's total_price from current estimate line items.
- * Follows the chain: contract -> proposal -> estimate -> line items (filtered by room is_active).
+ * Follows the chain: contract -> proposal -> estimate -> line items (filtered by room is_in_scope).
  */
 export async function regenerateContractTotal(
   contractId: string
@@ -143,7 +143,7 @@ export async function regenerateContractTotal(
         room_id,
         rooms!estimate_line_items_room_id_fkey (
           id,
-          is_active
+          is_in_scope
         )
       `)
       .eq('estimate_id', estimateId)
@@ -152,11 +152,11 @@ export async function regenerateContractTotal(
       throw new Error(`Failed to fetch line items: ${lineItemsError.message}`)
     }
 
-    // Calculate new total (only active rooms)
+    // Calculate new total (only in-scope rooms)
     let newTotal = 0
     for (const item of (lineItems || []) as any[]) {
-      const room = item.rooms as { id: string; is_active: boolean } | null
-      if (room && room.is_active === false) continue
+      const room = item.rooms as { id: string; is_in_scope: boolean } | null
+      if (room && room.is_in_scope === false) continue
       newTotal += Number(item.client_price) || 0
     }
 

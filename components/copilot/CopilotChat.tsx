@@ -13,9 +13,17 @@ import { useVoiceChat } from '@/hooks/use-voice-chat'
 import * as tus from 'tus-js-client'
 import type { ChatMessage } from '@/types/db'
 
+interface ExecutedAction {
+  type: string
+  success: boolean
+  id?: string
+  data?: any
+  error?: string
+}
+
 interface CopilotChatProps {
   projectId: string
-  onSendMessage?: (content: string, fileUrls?: string[]) => Promise<{ response_text: string; actions?: any[] } | undefined>
+  onSendMessage?: (content: string, fileUrls?: string[]) => Promise<{ response_text: string; executedActions?: ExecutedAction[]; actions?: any[] } | undefined>
   onVoiceRecord?: () => void
   onFileAttach?: () => void
   className?: string
@@ -493,14 +501,34 @@ export function CopilotChat({
         
         // IMMEDIATE UI UPDATE: Add assistant's response to messages immediately
         if (result && typeof result === 'object' && 'response_text' in result) {
-          const responseData = result as { response_text: string; actions?: any[] }
+          const responseData = result as { response_text: string; executedActions?: ExecutedAction[]; actions?: any[] }
           console.log('[CopilotChat] Adding assistant response immediately:', responseData.response_text)
+          
+          // Check for failed actions and surface errors to the user
+          const executedActions = responseData.executedActions || []
+          const failedActions = executedActions.filter(a => !a.success)
+          const successfulActions = executedActions.filter(a => a.success)
+          
+          if (failedActions.length > 0) {
+            console.error('[CopilotChat] Some actions failed:', failedActions)
+            for (const failed of failedActions) {
+              toast.error(`Action failed: ${failed.type}`, {
+                description: failed.error || 'Unknown error — check server logs',
+                duration: 8000,
+              })
+            }
+          }
+          
+          if (successfulActions.length > 0) {
+            console.log('[CopilotChat] Successful actions:', successfulActions.map(a => a.type))
+          }
+
           const assistantMessage: ChatMessage = {
             id: `temp-assistant-${Date.now()}`,
             project_id: projectId,
             role: 'assistant',
             content: responseData.response_text,
-            related_action: responseData.actions ? JSON.stringify(responseData.actions) : null,
+            related_action: executedActions.length > 0 ? JSON.stringify(executedActions) : null,
             created_at: new Date().toISOString()
           }
           
@@ -519,12 +547,16 @@ export function CopilotChat({
             router.refresh()
           })
 
-          // Dispatch global event to trigger client-side data refresh
-          // Add a small delay to ensure database transaction has committed
-          setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('estimate-updated'))
-            console.log('[CopilotChat] Dispatched estimate-updated event')
-          }, 500)
+          // Only dispatch refresh events if at least one action succeeded
+          if (successfulActions.length > 0) {
+            // Dispatch global event to trigger client-side data refresh
+            // Add a small delay to ensure database transaction has committed
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('estimate-updated'))
+              window.dispatchEvent(new CustomEvent('rooms-updated'))
+              console.log('[CopilotChat] Dispatched estimate-updated + rooms-updated events')
+            }, 500)
+          }
         }
         
         // After successful send, the parent should update messages via props

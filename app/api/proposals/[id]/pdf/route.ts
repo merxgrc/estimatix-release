@@ -122,7 +122,7 @@ export async function GET(
     let totalAllowances = 0
     
     if (proposal.estimate_id) {
-      // Join with rooms to filter out excluded rooms (is_active = false)
+      // Join with rooms to filter out excluded rooms (is_in_scope = false)
       const { data: lineItemsData, error: lineItemsError } = await supabase
         .from('estimate_line_items')
         .select(`
@@ -132,7 +132,7 @@ export async function GET(
           room_id,
           rooms!estimate_line_items_room_id_fkey (
             id,
-            is_active
+            is_in_scope
           )
         `)
         .eq('estimate_id', proposal.estimate_id)
@@ -143,10 +143,10 @@ export async function GET(
           const desc = item.description || ''
           if (desc.trim().length === 0) return
           
-          // Filter out items from excluded (inactive) rooms
+          // Filter out items from excluded (out-of-scope) rooms
           // Items without a room (room_id = null) are included by default
-          const room = item.rooms as { id: string; is_active: boolean } | null
-          if (room && room.is_active === false) {
+          const room = item.rooms as { id: string; is_in_scope: boolean } | null
+          if (room && room.is_in_scope === false) {
             return // Skip excluded room items
           }
           

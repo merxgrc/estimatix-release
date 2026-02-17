@@ -6,6 +6,7 @@
 export interface LineItem {
   id?: string
   room_name: string
+  room_id?: string | null // FK to rooms table
   description: string
   category: string
   cost_code: string | null // Allow null - don't force 999
@@ -23,6 +24,8 @@ export interface LineItem {
   confidence?: number | null
   notes?: string
   is_allowance?: boolean | null // Flag to indicate if this is an allowance item
+  // Quantity source tracking
+  calc_source?: 'manual' | 'room_dimensions'  // How quantity was determined
   // Optional fields for dimensions (legacy support)
   dimensions?: {
     unit: 'in' | 'ft' | 'cm' | 'm'

@@ -82,7 +82,7 @@ export function CreateProposalDialog({
         setIsLoadingSummary(true)
         
         // Fetch all line items for the estimate with room info
-        // Join with rooms to filter out excluded rooms (is_active = false)
+        // Join with rooms to filter out excluded rooms (is_in_scope = false)
         const { data: lineItems, error: fetchError } = await supabase
           .from('estimate_line_items')
           .select(`
@@ -93,7 +93,7 @@ export function CreateProposalDialog({
             room_id,
             rooms!estimate_line_items_room_id_fkey (
               id,
-              is_active
+              is_in_scope
             )
           `)
           .eq('estimate_id', estimateId)
@@ -107,15 +107,15 @@ export function CreateProposalDialog({
           return
         }
 
-        // Calculate total price (sum of all client_price from ACTIVE rooms only)
+        // Calculate total price (sum of all client_price from IN-SCOPE rooms only)
         let total = 0
         let allowances = 0
 
         for (const item of lineItems as any[]) {
-          // Filter out items from excluded (inactive) rooms
+          // Filter out items from excluded (out-of-scope) rooms
           // Items without a room (room_id = null) are included by default
-          const room = item.rooms as { id: string; is_active: boolean } | null
-          if (room && room.is_active === false) {
+          const room = item.rooms as { id: string; is_in_scope: boolean } | null
+          if (room && room.is_in_scope === false) {
             continue // Skip excluded room items
           }
           
@@ -270,7 +270,7 @@ export function CreateProposalDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create New Proposal</DialogTitle>
           <DialogDescription>

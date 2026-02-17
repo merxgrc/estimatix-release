@@ -59,9 +59,10 @@ function getPDFParseClass(): any {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const mod = require('pdf-parse')
       _PDFParse = mod.PDFParse || mod.default?.PDFParse
-      if (!_PDFParse) throw new Error('PDFParse class not found in module')
+      if (!_PDFParse) throw new Error('PDFParse class not found in pdf-parse module')
+      console.log('[PDF Utils] pdf-parse loaded successfully via require()')
     } catch (err) {
-      console.error('[PDF Utils] Failed to load pdf-parse:', err)
+      console.error('[PDF Utils] Failed to load pdf-parse via require():', err instanceof Error ? err.message : err)
       throw err
     }
   }

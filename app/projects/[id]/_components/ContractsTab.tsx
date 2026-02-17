@@ -157,83 +157,161 @@ export function ContractsTab({ project }: { project: Project }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <CardHeader className="p-0"><CardTitle>Contracts</CardTitle></CardHeader>
-        <Button onClick={() => setCreateDrawerOpen(true)}><Plus className="mr-2 h-4 w-4" />New Contract</Button>
+        <Button onClick={() => setCreateDrawerOpen(true)} className="w-full sm:w-auto min-h-[44px] sm:min-h-0">
+          <Plus className="mr-2 h-4 w-4" />New Contract
+        </Button>
       </div>
 
       {contracts.length === 0 ? (
         <Card><CardContent className="py-12 text-center">No contracts yet</CardContent></Card>
       ) : (
-        <Card>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Date</TableHead>
-                <TableHead>Total Price</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {contracts.map((contract) => (
-                <TableRow key={contract.id}>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      {new Date(contract.created_at).toLocaleDateString()}
-                      {contract.is_stale && (
-                        <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
-                          <RefreshCcw className="mr-1 h-3 w-3" />
-                          Out of date
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>${new Intl.NumberFormat().format(contract.total_price || 0)}</TableCell>
-                  <TableCell><Badge>{contract.status}</Badge></TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      {contract.is_stale && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleRegenerate(contract.id)}
-                          disabled={regeneratingId === contract.id}
-                          className="text-amber-700 border-amber-300 hover:bg-amber-50"
+        <>
+          {/* Desktop Table */}
+          <Card className="hidden md:block">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Total Price</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {contracts.map((contract) => (
+                  <TableRow key={contract.id}>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {new Date(contract.created_at).toLocaleDateString()}
+                        {contract.is_stale && (
+                          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
+                            <RefreshCcw className="mr-1 h-3 w-3" />
+                            Out of date
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>${new Intl.NumberFormat().format(contract.total_price || 0)}</TableCell>
+                    <TableCell><Badge>{contract.status}</Badge></TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        {contract.is_stale && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleRegenerate(contract.id)}
+                            disabled={regeneratingId === contract.id}
+                            className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                          >
+                            {regeneratingId === contract.id ? (
+                              <>
+                                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                                Updating...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCcw className="mr-1 h-4 w-4" />
+                                Update Total
+                              </>
+                            )}
+                          </Button>
+                        )}
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => handleViewPdf(contract.id)}
+                          title={contract.is_stale ? "PDF will reflect current estimate (rooms/line items may have changed)" : undefined}
                         >
-                          {regeneratingId === contract.id ? (
-                            <>
-                              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                              Updating...
-                            </>
-                          ) : (
-                            <>
-                              <RefreshCcw className="mr-1 h-4 w-4" />
-                              Update Total
-                            </>
-                          )}
+                          <FileText className="mr-2 h-4 w-4" />View PDF
                         </Button>
-                      )}
+                        {contract.status === 'signed' && (
+                          <Button variant="outline" size="sm" onClick={() => handleStartJob(contract.id)}>
+                            <Play className="mr-2 h-4 w-4" />Start Job
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
+
+          {/* Mobile Card List */}
+          <div className="space-y-3 md:hidden">
+            {contracts.map((contract) => (
+              <Card key={contract.id} className="p-4">
+                <div className="space-y-3">
+                  {/* Header: date + status */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">
+                      {new Date(contract.created_at).toLocaleDateString()}
+                    </span>
+                    <Badge>{contract.status}</Badge>
+                  </div>
+
+                  {/* Price + stale */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-lg font-semibold">
+                      ${new Intl.NumberFormat().format(contract.total_price || 0)}
+                    </span>
+                    {contract.is_stale && (
+                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
+                        <RefreshCcw className="mr-1 h-3 w-3" />
+                        Out of date
+                      </Badge>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex flex-wrap gap-2">
+                    {contract.is_stale && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleRegenerate(contract.id)}
+                        disabled={regeneratingId === contract.id}
+                        className="text-amber-700 border-amber-300 hover:bg-amber-50 min-h-[44px] flex-1"
+                      >
+                        {regeneratingId === contract.id ? (
+                          <>
+                            <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                            Updating...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCcw className="mr-1 h-4 w-4" />
+                            Update Total
+                          </>
+                        )}
+                      </Button>
+                    )}
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => handleViewPdf(contract.id)}
+                      className="min-h-[44px] flex-1"
+                    >
+                      <FileText className="mr-2 h-4 w-4" />View PDF
+                    </Button>
+                    {contract.status === 'signed' && (
                       <Button 
                         variant="outline" 
                         size="sm" 
-                        onClick={() => handleViewPdf(contract.id)}
-                        title={contract.is_stale ? "PDF will reflect current estimate (rooms/line items may have changed)" : undefined}
+                        onClick={() => handleStartJob(contract.id)}
+                        className="min-h-[44px] flex-1"
                       >
-                        <FileText className="mr-2 h-4 w-4" />View PDF
+                        <Play className="mr-2 h-4 w-4" />Start Job
                       </Button>
-                      {contract.status === 'signed' && (
-                        <Button variant="outline" size="sm" onClick={() => handleStartJob(contract.id)}>
-                          <Play className="mr-2 h-4 w-4" />Start Job
-                        </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
       )}
 
       <CreateContractDrawer

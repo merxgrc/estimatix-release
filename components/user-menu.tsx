@@ -36,22 +36,24 @@ export function UserMenu({ user }: UserMenuProps) {
   const displayName = user?.user_metadata?.full_name || user?.email || 'User'
 
   return (
-    <div className="flex items-center space-x-4">
-      <div className="flex items-center space-x-2">
+    <div className="flex items-center gap-2 md:gap-4">
+      {/* User name - hidden on mobile to save space */}
+      <div className="hidden md:flex items-center space-x-2">
         <User className="h-4 w-4 text-muted-foreground" />
-        <span className="text-sm text-muted-foreground">
+        <span className="text-sm text-muted-foreground truncate max-w-[150px]">
           {displayName}
         </span>
       </div>
+      {/* Logout button - icon-only on mobile */}
       <Button
         variant="outline"
         size="sm"
         onClick={handleLogout}
         disabled={loading}
-        className="flex items-center space-x-2"
+        className="min-h-[44px] md:min-h-0 flex items-center gap-2"
       >
         <LogOut className="h-4 w-4" />
-        <span>{loading ? 'Signing out...' : 'Sign out'}</span>
+        <span className="hidden md:inline">{loading ? 'Signing out...' : 'Sign out'}</span>
       </Button>
     </div>
   )

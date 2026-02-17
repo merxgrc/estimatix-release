@@ -255,14 +255,14 @@ export function ManageTab({ project }: { project: Project }) {
             <>
               {/* Progress Bar */}
               <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
+                <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <CardTitle>Project Progress</CardTitle>
                   {/* Close Out Button - Show when estimate is contract_signed */}
                   {estimateStatus === 'contract_signed' && estimateId && (
                     <Button 
                       onClick={() => setCloseOutOpen(true)}
                       variant="outline"
-                      className="gap-2"
+                      className="gap-2 w-full sm:w-auto min-h-[44px] sm:min-h-0"
                     >
                       <CheckCircle2 className="h-4 w-4" />
                       Close Out Project
@@ -292,40 +292,70 @@ export function ManageTab({ project }: { project: Project }) {
                     <CardTitle className="text-lg">{group}</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <Table>
-                      <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[50%]">Description</TableHead>
-                        <TableHead className="text-right">Price</TableHead>
-                        <TableHead className="w-[180px]">Status</TableHead>
-                      </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {groupTasks.map((task) => (
-                          <TableRow key={task.id}>
-                            <TableCell>{task.description}</TableCell>
-                            <TableCell className="tabular-nums">
+                    {/* Desktop Table */}
+                    <div className="hidden md:block">
+                      <Table>
+                        <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[50%]">Description</TableHead>
+                          <TableHead className="text-right">Price</TableHead>
+                          <TableHead className="w-[180px]">Status</TableHead>
+                        </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {groupTasks.map((task) => (
+                            <TableRow key={task.id}>
+                              <TableCell>{task.description}</TableCell>
+                              <TableCell className="tabular-nums">
+                                ${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(task.price || 0)}
+                              </TableCell>
+                              <TableCell>
+                                <Select 
+                                  value={task.status} 
+                                  onValueChange={(value: 'pending' | 'scheduled' | 'completed') => updateTaskStatus(task.id, value)}
+                                >
+                                  <SelectTrigger className="w-40">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="pending">Pending</SelectItem>
+                                    <SelectItem value="scheduled">Scheduled</SelectItem>
+                                    <SelectItem value="completed">Completed</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    {/* Mobile Cards */}
+                    <div className="space-y-3 md:hidden">
+                      {groupTasks.map((task) => (
+                        <div key={task.id} className="border rounded-lg p-3 space-y-2">
+                          <p className="text-sm font-medium">{task.description}</p>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold tabular-nums">
                               ${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(task.price || 0)}
-                            </TableCell>
-                            <TableCell>
-                              <Select 
-                                value={task.status} 
-                                onValueChange={(value: 'pending' | 'scheduled' | 'completed') => updateTaskStatus(task.id, value)}
-                              >
-                                <SelectTrigger className="w-40">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="pending">Pending</SelectItem>
-                                  <SelectItem value="scheduled">Scheduled</SelectItem>
-                                  <SelectItem value="completed">Completed</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                            </span>
+                            <Select 
+                              value={task.status} 
+                              onValueChange={(value: 'pending' | 'scheduled' | 'completed') => updateTaskStatus(task.id, value)}
+                            >
+                              <SelectTrigger className="w-36 min-h-[44px]">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="pending">Pending</SelectItem>
+                                <SelectItem value="scheduled">Scheduled</SelectItem>
+                                <SelectItem value="completed">Completed</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </CardContent>
                 </Card>
               ))}
@@ -334,9 +364,9 @@ export function ManageTab({ project }: { project: Project }) {
         </TabsContent>
 
         <TabsContent value="invoices" className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-semibold">Project Invoices</h2>
-            <Button onClick={() => setCreateInvoiceOpen(true)}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <h2 className="text-xl sm:text-2xl font-semibold">Project Invoices</h2>
+            <Button onClick={() => setCreateInvoiceOpen(true)} className="w-full sm:w-auto min-h-[44px] sm:min-h-0">
               <Plus className="mr-2 h-4 w-4" />
               Create New Invoice
             </Button>
@@ -349,99 +379,149 @@ export function ManageTab({ project }: { project: Project }) {
               <p className="text-muted-foreground">Create your first invoice to start billing.</p>
             </CardContent></Card>
           ) : (
-            <Card>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Invoice #</TableHead>
-                    <TableHead>Date Issued</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {invoices.map((invoice) => {
-                    // Determine badge variant based on status
-                    const getStatusVariant = (status: string) => {
-                      switch (status.toLowerCase()) {
-                        case 'paid':
-                          return 'default' // Green (primary)
-                        case 'sent':
-                          return 'secondary' // Blue
-                        case 'draft':
-                          return 'outline' // Gray
-                        case 'overdue':
-                          return 'destructive' // Red
-                        default:
-                          return 'outline'
+            <>
+              {/* Desktop Table */}
+              <Card className="hidden md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Invoice #</TableHead>
+                      <TableHead>Date Issued</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {invoices.map((invoice) => {
+                      const getStatusColor = (status: string) => {
+                        switch (status.toLowerCase()) {
+                          case 'paid':
+                            return 'bg-primary/20 text-primary border-primary/30'
+                          case 'sent':
+                            return 'bg-primary/10 text-primary border-primary/20'
+                          case 'draft':
+                            return 'bg-muted text-muted-foreground border-border'
+                          case 'overdue':
+                            return 'bg-destructive/10 text-destructive border-destructive/30'
+                          default:
+                            return 'bg-muted text-muted-foreground border-border'
+                        }
                       }
-                    }
 
-                    // Get status color class for custom styling
-                    const getStatusColor = (status: string) => {
-                      switch (status.toLowerCase()) {
-                        case 'paid':
-                          return 'bg-primary/20 text-primary border-primary/30'
-                        case 'sent':
-                          return 'bg-primary/10 text-primary border-primary/20'
-                        case 'draft':
-                          return 'bg-muted text-muted-foreground border-border'
-                        case 'overdue':
-                          return 'bg-destructive/10 text-destructive border-destructive/30'
-                        default:
-                          return 'bg-muted text-muted-foreground border-border'
-                      }
-                    }
+                      return (
+                        <TableRow key={invoice.id}>
+                          <TableCell className="font-medium">{invoice.invoice_number}</TableCell>
+                          <TableCell>{new Date(invoice.issued_date).toLocaleDateString()}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            ${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(invoice.total_amount || 0)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={getStatusColor(invoice.status)}>
+                              {invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button 
+                              variant="ghost" 
+                              size="icon"
+                              onClick={async () => {
+                                try {
+                                  const response = await fetch(`/api/invoices/${invoice.id}/pdf`)
+                                  if (!response.ok) throw new Error('Failed to generate PDF')
+                                  const blob = await response.blob()
+                                  const url = window.URL.createObjectURL(blob)
+                                  const a = document.createElement('a')
+                                  a.href = url
+                                  a.download = `${invoice.invoice_number}.pdf`
+                                  document.body.appendChild(a)
+                                  a.click()
+                                  document.body.removeChild(a)
+                                  window.URL.revokeObjectURL(url)
+                                  toast.success('PDF downloaded')
+                                } catch (err) {
+                                  toast.error('Failed to download PDF')
+                                }
+                              }}
+                              title="Download PDF"
+                            >
+                              <Download className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </Card>
 
-                    return (
-                      <TableRow key={invoice.id}>
-                        <TableCell className="font-medium">{invoice.invoice_number}</TableCell>
-                        <TableCell>{new Date(invoice.issued_date).toLocaleDateString()}</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          ${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(invoice.total_amount || 0)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge 
-                            variant={getStatusVariant(invoice.status) as any}
-                            className={getStatusColor(invoice.status)}
-                          >
+              {/* Mobile Card List */}
+              <div className="space-y-3 md:hidden">
+                {invoices.map((invoice) => {
+                  const getStatusColor = (status: string) => {
+                    switch (status.toLowerCase()) {
+                      case 'paid':
+                        return 'bg-primary/20 text-primary border-primary/30'
+                      case 'sent':
+                        return 'bg-primary/10 text-primary border-primary/20'
+                      case 'draft':
+                        return 'bg-muted text-muted-foreground border-border'
+                      case 'overdue':
+                        return 'bg-destructive/10 text-destructive border-destructive/30'
+                      default:
+                        return 'bg-muted text-muted-foreground border-border'
+                    }
+                  }
+
+                  return (
+                    <Card key={invoice.id} className="p-4">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-sm">{invoice.invoice_number}</span>
+                          <Badge className={getStatusColor(invoice.status)}>
                             {invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
                           </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button 
-                            variant="ghost" 
-                            size="icon"
-                            onClick={async () => {
-                              try {
-                                const response = await fetch(`/api/invoices/${invoice.id}/pdf`)
-                                if (!response.ok) throw new Error('Failed to generate PDF')
-                                const blob = await response.blob()
-                                const url = window.URL.createObjectURL(blob)
-                                const a = document.createElement('a')
-                                a.href = url
-                                a.download = `${invoice.invoice_number}.pdf`
-                                document.body.appendChild(a)
-                                a.click()
-                                document.body.removeChild(a)
-                                window.URL.revokeObjectURL(url)
-                                toast.success('PDF downloaded')
-                              } catch (err) {
-                                toast.error('Failed to download PDF')
-                              }
-                            }}
-                            title="Download PDF"
-                          >
-                            <Download className="h-4 w-4" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </Card>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(invoice.issued_date).toLocaleDateString()}
+                          </span>
+                          <span className="text-lg font-semibold tabular-nums">
+                            ${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(invoice.total_amount || 0)}
+                          </span>
+                        </div>
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          className="w-full min-h-[44px]"
+                          onClick={async () => {
+                            try {
+                              const response = await fetch(`/api/invoices/${invoice.id}/pdf`)
+                              if (!response.ok) throw new Error('Failed to generate PDF')
+                              const blob = await response.blob()
+                              const url = window.URL.createObjectURL(blob)
+                              const a = document.createElement('a')
+                              a.href = url
+                              a.download = `${invoice.invoice_number}.pdf`
+                              document.body.appendChild(a)
+                              a.click()
+                              document.body.removeChild(a)
+                              window.URL.revokeObjectURL(url)
+                              toast.success('PDF downloaded')
+                            } catch (err) {
+                              toast.error('Failed to download PDF')
+                            }
+                          }}
+                        >
+                          <Download className="mr-2 h-4 w-4" />
+                          Download PDF
+                        </Button>
+                      </div>
+                    </Card>
+                  )
+                })}
+              </div>
+            </>
           )}
 
           <CreateInvoiceDrawer

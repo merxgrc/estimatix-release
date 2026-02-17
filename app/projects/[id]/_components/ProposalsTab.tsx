@@ -368,9 +368,9 @@ export function ProposalsTab({ project, activeEstimateId }: ProposalsTabProps) {
   return (
     <div className="space-y-6">
       {/* Action Buttons */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-semibold">Proposals</h2>
+          <h2 className="text-xl sm:text-2xl font-semibold">Proposals</h2>
           <p className="text-sm text-muted-foreground mt-1">
             Create and manage construction proposals from your estimates
           </p>
@@ -378,6 +378,7 @@ export function ProposalsTab({ project, activeEstimateId }: ProposalsTabProps) {
         <Button
           onClick={() => setIsDialogOpen(true)}
           disabled={isCreating || !activeEstimateId}
+          className="w-full sm:w-auto min-h-[44px] sm:min-h-0"
         >
           <Plus className="mr-2 h-4 w-4" />
           New Proposal
@@ -419,111 +420,203 @@ export function ProposalsTab({ project, activeEstimateId }: ProposalsTabProps) {
         </Card>
       )}
 
-      {/* Proposals Table */}
+      {/* Proposals Table / Cards */}
       {!isLoading && proposals.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>All Proposals</CardTitle>
-            <CardDescription>
-              {proposals.length} proposal{proposals.length !== 1 ? 's' : ''} for this project
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Version</TableHead>
-                  <TableHead>Title</TableHead>
-                  <TableHead className="text-right">Total Price</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {proposals.map((proposal) => (
-                  <TableRow key={proposal.id}>
-                    <TableCell className="font-medium">
-                      {formatDate(proposal.created_at)}
-                    </TableCell>
-                    <TableCell>v{proposal.version}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        {proposal.title}
-                        {proposal.is_stale && (
-                          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
-                            <RefreshCcw className="mr-1 h-3 w-3" />
-                            Out of date
-                          </Badge>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right font-semibold">
-                      {formatCurrency(proposal.total_price)}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={proposal.status} />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        {proposal.is_stale && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleRegenerate(proposal.id)}
-                            disabled={regeneratingId === proposal.id}
-                            className="text-amber-700 border-amber-300 hover:bg-amber-50"
-                          >
-                            {regeneratingId === proposal.id ? (
-                              <>
-                                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                                Updating...
-                              </>
-                            ) : (
-                              <>
-                                <RefreshCcw className="mr-1 h-4 w-4" />
-                                Update Total
-                              </>
-                            )}
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleViewPdf(proposal.id)}
-                          title={proposal.is_stale ? "PDF will reflect current estimate (rooms/line items may have changed)" : undefined}
-                        >
-                          <Eye className="mr-1 h-4 w-4" />
-                          View PDF
-                        </Button>
-                        {proposal.status === 'draft' && (
+        <>
+          {/* Desktop Table */}
+          <Card className="hidden md:block">
+            <CardHeader>
+              <CardTitle>All Proposals</CardTitle>
+              <CardDescription>
+                {proposals.length} proposal{proposals.length !== 1 ? 's' : ''} for this project
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Version</TableHead>
+                    <TableHead>Title</TableHead>
+                    <TableHead className="text-right">Total Price</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {proposals.map((proposal) => (
+                    <TableRow key={proposal.id}>
+                      <TableCell className="font-medium">
+                        {formatDate(proposal.created_at)}
+                      </TableCell>
+                      <TableCell>v{proposal.version}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          {proposal.title}
+                          {proposal.is_stale && (
+                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
+                              <RefreshCcw className="mr-1 h-3 w-3" />
+                              Out of date
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {formatCurrency(proposal.total_price)}
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={proposal.status} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {proposal.is_stale && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleRegenerate(proposal.id)}
+                              disabled={regeneratingId === proposal.id}
+                              className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                            >
+                              {regeneratingId === proposal.id ? (
+                                <>
+                                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                                  Updating...
+                                </>
+                              ) : (
+                                <>
+                                  <RefreshCcw className="mr-1 h-4 w-4" />
+                                  Update Total
+                                </>
+                              )}
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleMarkApproved(proposal.id)}
-                            disabled={approvingId === proposal.id}
+                            onClick={() => handleViewPdf(proposal.id)}
+                            title={proposal.is_stale ? "PDF will reflect current estimate (rooms/line items may have changed)" : undefined}
                           >
-                            {approvingId === proposal.id ? (
-                              <>
-                                <div className="mr-1 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                                Approving...
-                              </>
-                            ) : (
-                              <>
-                                <CheckCircle2 className="mr-1 h-4 w-4" />
-                                Mark Approved
-                              </>
-                            )}
+                            <Eye className="mr-1 h-4 w-4" />
+                            View PDF
                           </Button>
+                          {proposal.status === 'draft' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleMarkApproved(proposal.id)}
+                              disabled={approvingId === proposal.id}
+                            >
+                              {approvingId === proposal.id ? (
+                                <>
+                                  <div className="mr-1 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                                  Approving...
+                                </>
+                              ) : (
+                                <>
+                                  <CheckCircle2 className="mr-1 h-4 w-4" />
+                                  Mark Approved
+                                </>
+                              )}
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          {/* Mobile Card List */}
+          <div className="space-y-3 md:hidden">
+            <p className="text-sm text-muted-foreground">
+              {proposals.length} proposal{proposals.length !== 1 ? 's' : ''} for this project
+            </p>
+            {proposals.map((proposal) => (
+              <Card key={proposal.id} className="p-4">
+                <div className="space-y-3">
+                  {/* Header row: title + status */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-sm truncate">{proposal.title}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        v{proposal.version} &middot; {formatDate(proposal.created_at)}
+                      </p>
+                    </div>
+                    <StatusBadge status={proposal.status} />
+                  </div>
+
+                  {/* Price + stale indicator */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-lg font-semibold">{formatCurrency(proposal.total_price)}</span>
+                    {proposal.is_stale && (
+                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
+                        <RefreshCcw className="mr-1 h-3 w-3" />
+                        Out of date
+                      </Badge>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex flex-wrap gap-2">
+                    {proposal.is_stale && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleRegenerate(proposal.id)}
+                        disabled={regeneratingId === proposal.id}
+                        className="text-amber-700 border-amber-300 hover:bg-amber-50 min-h-[44px] flex-1"
+                      >
+                        {regeneratingId === proposal.id ? (
+                          <>
+                            <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                            Updating...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCcw className="mr-1 h-4 w-4" />
+                            Update Total
+                          </>
                         )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleViewPdf(proposal.id)}
+                      className="min-h-[44px] flex-1"
+                    >
+                      <Eye className="mr-1 h-4 w-4" />
+                      View PDF
+                    </Button>
+                    {proposal.status === 'draft' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleMarkApproved(proposal.id)}
+                        disabled={approvingId === proposal.id}
+                        className="min-h-[44px] flex-1"
+                      >
+                        {approvingId === proposal.id ? (
+                          <>
+                            <div className="mr-1 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            Approving...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="mr-1 h-4 w-4" />
+                            Approve
+                          </>
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
       )}
 
       {/* Create Proposal Dialog */}

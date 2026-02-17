@@ -147,12 +147,15 @@ export interface Database {
           project_id: string
           room_name: string | null
           room_id: string | null
+          level: string | null
           scope: string | null
+          scope_group: string | null
           description: string | null
           quantity: number | null
           unit: string | null
           unit_cost: number | null
           total: number | null
+          total_cost: number | null
           cost_code: string | null
           category: string | null
           labor_cost: number | null
@@ -161,6 +164,7 @@ export interface Database {
           direct_cost: number | null
           margin_percent: number | null
           client_price: number | null
+          calc_source: 'manual' | 'room_dimensions'
           selection_id: string | null
           task_library_id: string | null
           pricing_source: string | null
@@ -177,12 +181,15 @@ export interface Database {
           project_id: string
           room_name?: string | null
           room_id?: string | null
+          level?: string | null
           scope?: string | null
+          scope_group?: string | null
           description?: string | null
           quantity?: number | null
           unit?: string | null
           unit_cost?: number | null
           total?: number | null
+          total_cost?: number | null
           cost_code?: string | null
           category?: string | null
           labor_cost?: number | null
@@ -191,6 +198,7 @@ export interface Database {
           direct_cost?: number | null
           margin_percent?: number | null
           client_price?: number | null
+          calc_source?: 'manual' | 'room_dimensions'
           selection_id?: string | null
           task_library_id?: string | null
           pricing_source?: string | null
@@ -207,12 +215,15 @@ export interface Database {
           project_id?: string
           room_name?: string | null
           room_id?: string | null
+          level?: string | null
           scope?: string | null
+          scope_group?: string | null
           description?: string | null
           quantity?: number | null
           unit?: string | null
           unit_cost?: number | null
           total?: number | null
+          total_cost?: number | null
           cost_code?: string | null
           category?: string | null
           labor_cost?: number | null
@@ -221,6 +232,7 @@ export interface Database {
           direct_cost?: number | null
           margin_percent?: number | null
           client_price?: number | null
+          calc_source?: 'manual' | 'room_dimensions'
           selection_id?: string | null
           task_library_id?: string | null
           pricing_source?: string | null
@@ -272,25 +284,55 @@ export interface Database {
       rooms: {
         Row: {
           id: string
-          project_id: string
+          estimate_id: string           // Original FK to estimates
+          user_id: string
+          project_id: string            // Added by migration 033, backfilled from estimates
           name: string
+          level: string | null          // NULL = unknown level
           type: string | null
+          status: string                // Original enum column
           area_sqft: number | null
+          length_ft: number | null
+          width_ft: number | null
+          ceiling_height_ft: number | null
+          floor_area_sqft: number | null
+          wall_area_sqft: number | null
+          ceiling_area_sqft: number | null
+          is_in_scope: boolean
           source: string | null
           is_active: boolean | null
           notes: string | null
+          sheet_label: string | null    // Blueprint sheet this room was detected on
+          level_source: string | null   // 'parsed' | 'manual' | 'backfilled'
+          sort_order: number
+          removed_at: string | null
+          removed_reason: string | null
           created_at: string
           updated_at: string
         }
         Insert: {
           id?: string
+          estimate_id?: string
+          user_id?: string
           project_id: string
           name: string
+          level?: string | null
           type?: string | null
+          status?: string
           area_sqft?: number | null
+          length_ft?: number | null
+          width_ft?: number | null
+          ceiling_height_ft?: number | null
+          floor_area_sqft?: number | null
+          wall_area_sqft?: number | null
+          ceiling_area_sqft?: number | null
+          is_in_scope?: boolean
           source?: string | null
           is_active?: boolean | null
           notes?: string | null
+          sheet_label?: string | null
+          level_source?: string | null
+          sort_order?: number
           created_at?: string
           updated_at?: string
         }
@@ -298,11 +340,21 @@ export interface Database {
           id?: string
           project_id?: string
           name?: string
+          level?: string | null
           type?: string | null
           area_sqft?: number | null
+          length_ft?: number | null
+          width_ft?: number | null
+          ceiling_height_ft?: number | null
+          floor_area_sqft?: number | null
+          wall_area_sqft?: number | null
+          ceiling_area_sqft?: number | null
+          is_in_scope?: boolean
           source?: string | null
           is_active?: boolean | null
           notes?: string | null
+          sheet_label?: string | null
+          level_source?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -749,6 +801,8 @@ export interface EstimateLineItem {
   room?: string // Legacy: kept for backward compatibility
   room_id?: string | null // New: FK to rooms table
   room_name?: string | null // Legacy: kept for backward compatibility
+  level?: string | null // Building level (denormalized from rooms.level)
+  scope_group?: string | null // Optional grouping: "Painting", "Framing", etc.
 
   quantity?: number
   unit?: string
@@ -760,6 +814,7 @@ export interface EstimateLineItem {
   direct_cost?: number
   margin_percent?: number
   client_price?: number
+  total_cost?: number // Auto-computed: (labor + material) * (1 + margin/100)
 
   // Unit-level pricing (for reference)
   unit_labor_cost?: number
@@ -771,6 +826,9 @@ export interface EstimateLineItem {
   pricing_source?: 'task_library' | 'user_library' | 'manual'
   confidence?: number
   matched_via?: 'semantic' | 'fuzzy' | 'cost_code_only'
+
+  // Quantity source tracking
+  calc_source?: 'manual' | 'room_dimensions'
 
   // Selections + allowances
   selection_id?: string | null
@@ -1111,8 +1169,12 @@ export interface PageClassification {
 export interface ParsedRoom {
   id: string // Client-generated UUID for UI tracking
   name: string
+  level: string // Building level: "Level 1", "Level 2", "Basement", etc.
   type?: string | null
   area_sqft?: number | null
+  length_ft?: number | null
+  width_ft?: number | null
+  ceiling_height_ft?: number | null
   dimensions?: string | null
   notes?: string | null
   confidence?: number

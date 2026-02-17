@@ -93,14 +93,14 @@ export async function createProposalFromEstimate(
     }
 
     // 1. Fetch all estimate_line_items for the given estimateId
-    // Join with rooms to filter out excluded rooms (is_active = false)
+    // Join with rooms to filter out excluded rooms (is_in_scope = false)
     const { data: lineItems, error: lineItemsError } = await supabase
       .from('estimate_line_items')
       .select(`
         *,
         rooms!estimate_line_items_room_id_fkey (
           id,
-          is_active
+          is_in_scope
         )
       `)
       .eq('estimate_id', estimateId)
@@ -114,15 +114,15 @@ export async function createProposalFromEstimate(
     }
 
     // 2. Calculate totals and extract allowance items
-    // Only include items from active/included rooms
+    // Only include items from in-scope rooms
     let totalPrice = 0
     const allowanceItems: AllowanceItem[] = []
 
     for (const item of lineItems) {
-      // Filter out items from excluded (inactive) rooms
+      // Filter out items from excluded (out-of-scope) rooms
       // Items without a room (room_id = null) are included by default
-      const room = (item as any).rooms as { id: string; is_active: boolean } | null
-      if (room && room.is_active === false) {
+      const room = (item as any).rooms as { id: string; is_in_scope: boolean } | null
+      if (room && room.is_in_scope === false) {
         continue // Skip excluded room items
       }
 
@@ -250,7 +250,7 @@ export async function createProposalFromEstimate(
 
 /**
  * Recalculate and update a proposal's total_price from current estimate line items.
- * Filters out items from excluded (inactive) rooms.
+ * Filters out items from excluded (out-of-scope) rooms.
  * Used when scope changes make the stored total_price stale.
  */
 export async function regenerateProposalTotal(
@@ -260,9 +260,7 @@ export async function regenerateProposalTotal(
     const user = await requireAuth()
     if (!user || !user.id) {
       throw new Error('Authentication required')
-    }
-
-    const supabase = await createServerClient()
+    }    const supabase = await createServerClient()
 
     // Fetch proposal with its estimate_id
     const { data: proposal, error: proposalError } = await supabase
@@ -300,7 +298,7 @@ export async function regenerateProposalTotal(
         room_id,
         rooms!estimate_line_items_room_id_fkey (
           id,
-          is_active
+          is_in_scope
         )
       `)
       .eq('estimate_id', proposal.estimate_id)
@@ -309,11 +307,11 @@ export async function regenerateProposalTotal(
       throw new Error(`Failed to fetch line items: ${lineItemsError.message}`)
     }
 
-    // Calculate new total (only active rooms)
+    // Calculate new total (only in-scope rooms)
     let newTotal = 0
     for (const item of (lineItems || []) as any[]) {
-      const room = item.rooms as { id: string; is_active: boolean } | null
-      if (room && room.is_active === false) continue
+      const room = item.rooms as { id: string; is_in_scope: boolean } | null
+      if (room && room.is_in_scope === false) continue
       newTotal += Number(item.client_price) || 0
     }
 

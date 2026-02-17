@@ -661,8 +661,8 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3 flex-1">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
                 {getFileTypeIcon(detectFileType(uploadFile.name, uploadFile.type))}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{uploadFile.name}</p>
@@ -691,6 +691,7 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
                   onClick={handleUpload}
                   disabled={isUploading}
                   size="sm"
+                  className="min-h-[44px] sm:min-h-0"
                 >
                   {isUploading ? (
                     <>
@@ -756,7 +757,7 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
         </div>
       )}
 
-      {/* Files Table */}
+      {/* Files Table / Cards */}
       {isLoading ? (
         <div className="text-center py-8 text-muted-foreground">Loading files...</div>
       ) : files.length === 0 ? (
@@ -764,65 +765,177 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
           No files uploaded yet. Drag and drop files above to get started.
         </div>
       ) : (
-        <div className="border rounded-lg">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {parseableFiles.length > 0 && (
-                  <TableHead className="w-10">Parse</TableHead>
-                )}
-                <TableHead>Name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Tag</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {files.map((file) => {
-                const isParseable = isFileParseableForBlueprint(file)
-                const isSelected = selectedFilesForParsing.has(file.id)
-                
-                return (
-                  <TableRow key={file.id}>
-                    {parseableFiles.length > 0 && (
+        <>
+          {/* Desktop Table */}
+          <div className="border rounded-lg hidden md:block">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  {parseableFiles.length > 0 && (
+                    <TableHead className="w-10">Parse</TableHead>
+                  )}
+                  <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Tag</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {files.map((file) => {
+                  const isParseable = isFileParseableForBlueprint(file)
+                  const isSelected = selectedFilesForParsing.has(file.id)
+                  
+                  return (
+                    <TableRow key={file.id}>
+                      {parseableFiles.length > 0 && (
+                        <TableCell>
+                          {isParseable ? (
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={() => toggleFileForParsing(file.id)}
+                            />
+                          ) : null}
+                        </TableCell>
+                      )}
                       <TableCell>
-                        {isParseable ? (
-                          <Checkbox
-                            checked={isSelected}
-                            onCheckedChange={() => toggleFileForParsing(file.id)}
-                          />
-                        ) : null}
+                        <button
+                          onClick={() => window.open(file.file_url, '_blank')}
+                          className="text-left hover:underline text-sm font-medium"
+                        >
+                          {file.original_filename || file.file_url.split('/').pop() || 'Untitled'}
+                        </button>
                       </TableCell>
-                    )}
-                    <TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          {getFileTypeIcon(file.file_type as FileType)}
+                          <span className="text-xs text-muted-foreground capitalize">
+                            {file.file_type || 'other'}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={getTagBadgeVariant((file.tag || file.kind) as FileTag)}>
+                          {(file.tag || file.kind) as FileTag || 'other'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {formatDate(file.created_at)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon">
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={() => handleDownload(
+                                file.file_url,
+                                file.original_filename || 'file'
+                              )}
+                            >
+                              <Download className="h-4 w-4 mr-2" />
+                              Download
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => handleUseInCopilot(file)}
+                            >
+                              <Sparkles className="h-4 w-4 mr-2" />
+                              Use in Copilot
+                            </DropdownMenuItem>
+                            {isParseable && (
+                              <DropdownMenuItem
+                                onClick={() => handleParseBlueprints(file)}
+                              >
+                                <ScanLine className="h-4 w-4 mr-2" />
+                                Parse for Rooms
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuLabel className="text-xs">Change Tag</DropdownMenuLabel>
+                            {(file.tag || file.kind) !== 'blueprint' && (
+                              <DropdownMenuItem onClick={() => handleUpdateTag(file.id, 'blueprint')}>
+                                📐 Blueprint
+                              </DropdownMenuItem>
+                            )}
+                            {(file.tag || file.kind) !== 'spec' && (
+                              <DropdownMenuItem onClick={() => handleUpdateTag(file.id, 'spec')}>
+                                📄 Spec
+                              </DropdownMenuItem>
+                            )}
+                            {(file.tag || file.kind) !== 'photo' && (
+                              <DropdownMenuItem onClick={() => handleUpdateTag(file.id, 'photo')}>
+                                📷 Photo
+                              </DropdownMenuItem>
+                            )}
+                            {(file.tag || file.kind) !== 'other' && (file.tag || file.kind) && (
+                              <DropdownMenuItem onClick={() => handleUpdateTag(file.id, 'other')}>
+                                📁 Other
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              onClick={() => handleDelete(file.id, file.file_url)}
+                              className="text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Mobile Card List */}
+          <div className="space-y-3 md:hidden">
+            {files.map((file) => {
+              const isParseable = isFileParseableForBlueprint(file)
+              const isSelected = selectedFilesForParsing.has(file.id)
+
+              return (
+                <div key={file.id} className="border rounded-lg p-4 bg-card space-y-3">
+                  {/* Top row: icon + name + actions */}
+                  <div className="flex items-start gap-3">
+                    <div className="flex-shrink-0 mt-0.5">
+                      {getFileTypeIcon(file.file_type as FileType)}
+                    </div>
+                    <div className="flex-1 min-w-0">
                       <button
                         onClick={() => window.open(file.file_url, '_blank')}
-                        className="text-left hover:underline text-sm font-medium"
+                        className="text-left hover:underline text-sm font-medium truncate block w-full"
                       >
                         {file.original_filename || file.file_url.split('/').pop() || 'Untitled'}
                       </button>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        {getFileTypeIcon(file.file_type as FileType)}
+                      <div className="flex items-center gap-2 mt-1">
                         <span className="text-xs text-muted-foreground capitalize">
                           {file.file_type || 'other'}
                         </span>
+                        <Badge variant={getTagBadgeVariant((file.tag || file.kind) as FileTag)} className="text-xs">
+                          {(file.tag || file.kind) as FileTag || 'other'}
+                        </Badge>
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={getTagBadgeVariant((file.tag || file.kind) as FileTag)}>
-                        {(file.tag || file.kind) as FileTag || 'other'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {formatDate(file.created_at)}
-                    </TableCell>
-                    <TableCell className="text-right">
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {formatDate(file.created_at)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {isParseable && parseableFiles.length > 0 && (
+                        <Checkbox
+                          checked={isSelected}
+                          onCheckedChange={() => toggleFileForParsing(file.id)}
+                          className="mr-1"
+                        />
+                      )}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon">
+                          <Button variant="ghost" size="icon" className="h-9 w-9">
                             <MoreVertical className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -882,13 +995,13 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
       )}
 
       {/* Blueprint Review Drawer */}

@@ -127,7 +127,7 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
   const [applySuccess, setApplySuccess] = useState(false)
   const [updatingMargins, setUpdatingMargins] = useState<Set<string>>(new Set())
   const [savingOverrides, setSavingOverrides] = useState<Set<string>>(new Set())
-  // Map of room_id -> is_active for computing active-scope totals
+  // Map of room_id -> is_in_scope for computing scope-filtered totals
   const [roomActiveMap, setRoomActiveMap] = useState<Map<string, boolean>>(new Map())
 
   // Load line items when estimate changes
@@ -165,20 +165,20 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
     loadLineItems()
   }, [activeEstimateId])
 
-  // Load room active status for computing active-scope totals
+  // Load room scope status for computing scope-filtered totals
   useEffect(() => {
     const loadRooms = async () => {
       if (!project?.id) return
 
       const { data: rooms } = await supabase
         .from('rooms')
-        .select('id, is_active')
+        .select('id, is_in_scope')
         .eq('project_id', project.id)
 
       if (rooms) {
         const map = new Map<string, boolean>()
-        rooms.forEach((r: { id: string; is_active: boolean | null }) => {
-          map.set(r.id, r.is_active !== false) // treat null as active
+        rooms.forEach((r: { id: string; is_in_scope: boolean | null }) => {
+          map.set(r.id, r.is_in_scope !== false) // treat null as in-scope
         })
         setRoomActiveMap(map)
       }

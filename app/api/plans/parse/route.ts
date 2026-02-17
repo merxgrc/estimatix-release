@@ -41,6 +41,7 @@ import {
   createFallbackResponse,
   type ExtractedRoom,
   type LineItemScaffold,
+  type SheetParseResult,
   type PageClassification as SchemaPageClassification,
 } from '@/lib/plans/schemas'
 
@@ -48,17 +49,18 @@ import {
   extractPdfPagesWithText,
   samplePagesForClassification,
   preparePagesForClassification,
-  isLikelyScannedPdf,
   renderPdfPagesToImages,
   selectPagesForVisionAnalysis,
   detectPdfType,
   getPdfPageCount,
-  type PdfTypeDetection,
 } from '@/lib/plans/pdf-utils'
 
 import {
   classifyPagesWithAI,
   selectPagesForDeepParse,
+  enrichClassificationsWithLevel,
+  groupPagesByLevel,
+  extractRoomsPerSheet,
   extractRoomsFromPagesWithAI,
   generateLineItemScaffoldWithAI,
   analyzeImageForRoomsWithAI,
@@ -262,6 +264,7 @@ export async function POST(req: NextRequest) {
     // Initialize result accumulators
     const allRooms: ExtractedRoom[] = []
     const allLineItems: LineItemScaffold[] = []
+    const allSheets: SheetParseResult[] = []
     const allAssumptions: string[] = []
     const allWarnings: string[] = []
     const allMissingInfo: string[] = []
@@ -434,39 +437,78 @@ export async function POST(req: NextRequest) {
           
           allClassifications.push(...classifications)
           
-          // Select pages for deep parsing
-          const relevantPageNumbers = selectPagesForDeepParse(classificationResult.pages, 10)
+          // =====================================================
+          // NEW: Enrich classifications with level detection
+          // =====================================================
+          const enriched = enrichClassificationsWithLevel(
+            classificationResult.pages,
+            extractionResult.pages.map(p => ({
+              pageNumber: p.pageNumber,
+              text: p.text,
+            }))
+          )
+          
+          // Group pages by level for per-sheet extraction
+          const sheetInfos = groupPagesByLevel(enriched)
+          const relevantPageNumbers = sheetInfos.map(s => s.pageNumber)
           allRelevantPages.push(...relevantPageNumbers)
           
+          // ─── Phase 1 Structured Logging: Sheet → Level mapping ───
+          console.log(`[Plans Parse] ═══ SHEET CLASSIFICATION SUMMARY ═══`)
+          console.log(`[Plans Parse] Detected ${sheetInfos.length} relevant sheet(s):`)
+          for (const s of sheetInfos) {
+            console.log(`[Plans Parse]   Sheet p${s.pageNumber}: "${s.sheetTitle}" → ${s.detectedLevel} (${s.classification}, confidence: ${s.confidence})`)
+          }
+          
           // =====================================================
-          // PASS 2: Deep Room Extraction
+          // PASS 2: Per-Sheet Room Extraction (deterministic)
           // =====================================================
           
-          if (relevantPageNumbers.length > 0) {
-            // Get text from relevant pages
-            const relevantPageTexts = relevantPageNumbers
-              .map(pn => {
-                const page = extractionResult.pages.find(p => p.pageNumber === pn)
-                return page?.text || ''
-              })
-              .filter(text => text.length > 0)
+          if (sheetInfos.length > 0) {
+            const perSheetResult = await extractRoomsPerSheet({
+              sheets: sheetInfos,
+              pages: extractionResult.pages.map(p => ({
+                pageNumber: p.pageNumber,
+                text: p.text,
+              })),
+              apiKey: openaiApiKey,
+            })
             
-            if (relevantPageTexts.length > 0) {
-              const roomsResult = await extractRoomsFromPagesWithAI({
-                pageTexts: relevantPageTexts,
-                pageNumbers: relevantPageNumbers,
-                apiKey: openaiApiKey,
+            allRooms.push(...perSheetResult.rooms)
+            allAssumptions.push(...perSheetResult.assumptions)
+            allWarnings.push(...perSheetResult.warnings)
+            allMissingInfo.push(...perSheetResult.missingInfo)
+            
+            // ─── Phase 1 Structured Logging: Per-sheet room counts ───
+            console.log(`[Plans Parse] ═══ ROOM EXTRACTION RESULTS ═══`)
+            for (const sr of perSheetResult.sheetResults) {
+              const roomTypes = sr.rooms.reduce((acc, r) => {
+                const type = r.type || 'other'
+                acc[type] = (acc[type] || 0) + 1
+                return acc
+              }, {} as Record<string, number>)
+              console.log(`[Plans Parse]   Sheet p${sr.sheet.pageNumber} "${sr.sheet.sheetTitle}" (${sr.sheet.detectedLevel}): ` +
+                `${sr.rooms.length} rooms → ${Object.entries(roomTypes).map(([t, c]) => `${c} ${t}`).join(', ')}`)
+              for (const room of sr.rooms) {
+                console.log(`[Plans Parse]     • "${room.name}" (${room.type || 'other'}) ` +
+                  `dims=${room.dimensions || 'n/a'} area=${room.area_sqft || 'n/a'}sqft`)
+              }
+            }
+            console.log(`[Plans Parse]   Total rooms (before dedup): ${perSheetResult.rooms.length}`)
+
+            // Build sheet parse results for structured output
+            for (const sr of perSheetResult.sheetResults) {
+              allSheets.push({
+                sheet_id: sr.sheet.pageNumber,
+                sheet_title: sr.sheet.sheetTitle,
+                detected_level: sr.sheet.detectedLevel,
+                classification: sr.sheet.classification,
+                confidence: sr.sheet.confidence,
+                rooms: sr.rooms,
               })
-              
-              allRooms.push(...roomsResult.rooms)
-              allAssumptions.push(...roomsResult.assumptions)
-              allWarnings.push(...roomsResult.warnings)
-              allMissingInfo.push(...roomsResult.missingInfo)
-            } else {
-              allWarnings.push('No readable text found on relevant pages.')
             }
           } else {
-            // Fallback: try first 5 pages
+            // Fallback: use legacy extraction on first 5 pages
             const fallbackPages = extractionResult.pages.slice(0, 5)
             const fallbackTexts = fallbackPages.map(p => p.text).filter(t => t.length > 0)
             
@@ -520,14 +562,33 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Deduplicate rooms by name (case-insensitive)
-    const seenNames = new Set<string>()
+    // Deduplicate rooms by level + name (case-insensitive)
+    // Rooms already have deterministic names from postProcessRooms, so
+    // "Bathroom 1 – Level 2" and "Bathroom 2 – Level 2" are distinct.
+    const seenKeys = new Set<string>()
     const uniqueRooms = allRooms.filter(room => {
-      const normalizedName = room.name.toLowerCase().trim()
-      if (seenNames.has(normalizedName)) return false
-      seenNames.add(normalizedName)
+      const key = `${(room.level || 'Level 1').toLowerCase()}::${room.name.toLowerCase().trim()}`
+      if (seenKeys.has(key)) return false
+      seenKeys.add(key)
       return true
     })
+
+    // ─── Phase 1 Structured Logging: Final room summary ───
+    const roomsByLevel: Record<string, string[]> = {}
+    for (const room of uniqueRooms) {
+      const level = room.level || 'Level 1'
+      if (!roomsByLevel[level]) roomsByLevel[level] = []
+      roomsByLevel[level].push(room.name)
+    }
+    console.log(`[Plans Parse] ═══ FINAL ROOM SUMMARY (after dedup) ═══`)
+    console.log(`[Plans Parse]   Total unique rooms: ${uniqueRooms.length}`)
+    for (const [level, names] of Object.entries(roomsByLevel)) {
+      console.log(`[Plans Parse]   ${level}: ${names.length} rooms → ${names.join(', ')}`)
+    }
+    const bathroomCount = uniqueRooms.filter(r => r.type === 'bathroom').length
+    const bedroomCount = uniqueRooms.filter(r => r.type === 'bedroom').length
+    if (bathroomCount > 0) console.log(`[Plans Parse]   Bathrooms: ${bathroomCount}`)
+    if (bedroomCount > 0) console.log(`[Plans Parse]   Bedrooms: ${bedroomCount}`)
 
     // Generate line item scaffold for detected rooms
     let lineItems: LineItemScaffold[] = []
@@ -597,8 +658,12 @@ export async function POST(req: NextRequest) {
     const typedRooms: TypedParsedRoom[] = uniqueRooms.map(r => ({
       id: randomUUID(),
       name: r.name,
+      level: r.level ?? 'Level 1', // Default until parser detects levels
       type: r.type,
       area_sqft: r.area_sqft,
+      length_ft: r.length_ft ?? null,
+      width_ft: r.width_ft ?? null,
+      ceiling_height_ft: r.ceiling_height_ft ?? null,
       dimensions: r.dimensions,
       notes: r.notes,
       confidence: r.confidence,
@@ -664,6 +729,7 @@ export async function POST(req: NextRequest) {
       planParseId,
       rooms: typedRooms,
       lineItemScaffold: typedLineItems,
+      sheets: allSheets.length > 0 ? allSheets : undefined,
       assumptions: allAssumptions,
       warnings: allWarnings,
       pageClassifications: allClassifications,

@@ -2,8 +2,8 @@
  * Plan Parsing Module
  * 
  * Provides utilities for 2-pass blueprint/plan parsing:
- * - Pass 1: Document map / page classification
- * - Pass 2: Deep room extraction from relevant pages
+ * - Pass 1: Document map / page classification + level detection
+ * - Pass 2: Per-sheet room extraction with deterministic naming
  */
 
 // Schemas and types
@@ -14,3 +14,6 @@ export * from './pdf-utils'
 
 // AI classification and extraction
 export * from './ai-classifier'
+
+// Deterministic room post-processing
+export * from './room-processor'

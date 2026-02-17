@@ -11,10 +11,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import type { Project } from "@/types/db"
-import { getProjectRooms, upsertRoom, toggleRoomScope, deleteRoom, type RoomWithStats } from "@/actions/rooms"
-import { Plus, Eye, EyeOff, Trash2, ExternalLink, DollarSign, Loader2, AlertCircle } from "lucide-react"
+// Alert unused here - scope status shown via Switch + Badge inline
+import type { Project, Room } from "@/types/db"
+import { getProjectRooms, upsertRoom, toggleRoomScope, deleteRoom, updateRoomDimensions, type RoomWithStats } from "@/actions/rooms"
+import { RoomDimensionsEditor } from "@/components/rooms/RoomDimensionsEditor"
+import { Plus, Trash2, ExternalLink, Loader2 } from "lucide-react"
 import { toast } from 'sonner'
 
 interface RoomsTabProps {
@@ -34,14 +35,28 @@ export function RoomsTab({ project }: RoomsTabProps) {
   const [formData, setFormData] = useState({
     id: undefined as string | undefined,
     name: '',
+    level: '',          // Empty = user must select; maps to NULL in DB
     type: '',
     area: '',
+    length_ft: '',
+    width_ft: '',
+    ceiling_height_ft: '8',
     notes: '',
   })
 
   // Fetch rooms on mount
   useEffect(() => {
     fetchRooms()
+  }, [project.id])
+
+  // Listen for rooms-updated event (e.g. after blueprint parsing)
+  useEffect(() => {
+    const handleRoomsUpdated = () => {
+      console.log('[RoomsTab] Received rooms-updated event, refetching rooms...')
+      fetchRooms()
+    }
+    window.addEventListener('rooms-updated', handleRoomsUpdated)
+    return () => window.removeEventListener('rooms-updated', handleRoomsUpdated)
   }, [project.id])
 
   const fetchRooms = async () => {
@@ -74,8 +89,12 @@ export function RoomsTab({ project }: RoomsTabProps) {
     setFormData({
       id: undefined,
       name: '',
+      level: '',           // Empty = user must select
       type: '',
       area: '',
+      length_ft: '',
+      width_ft: '',
+      ceiling_height_ft: '8',
       notes: '',
     })
     setIsDialogOpen(true)
@@ -85,8 +104,12 @@ export function RoomsTab({ project }: RoomsTabProps) {
     setFormData({
       id: room.id,
       name: room.name,
+      level: room.level || '',
       type: room.type || '',
       area: room.area_sqft?.toString() || '',
+      length_ft: room.length_ft?.toString() || '',
+      width_ft: room.width_ft?.toString() || '',
+      ceiling_height_ft: room.ceiling_height_ft?.toString() || '8',
       notes: room.notes || '',
     })
     setIsDialogOpen(true)
@@ -103,8 +126,12 @@ export function RoomsTab({ project }: RoomsTabProps) {
         projectId: project.id,
         id: formData.id,
         name: formData.name.trim(),
+        level: formData.level.trim() || undefined, // Let server default for new rooms; preserve existing for edits
         type: formData.type.trim() || null,
         area: formData.area ? parseFloat(formData.area) : null,
+        length_ft: formData.length_ft ? parseFloat(formData.length_ft) : null,
+        width_ft: formData.width_ft ? parseFloat(formData.width_ft) : null,
+        ceiling_height_ft: formData.ceiling_height_ft ? parseFloat(formData.ceiling_height_ft) : null,
         notes: formData.notes.trim() || null,
       })
 
@@ -132,13 +159,13 @@ export function RoomsTab({ project }: RoomsTabProps) {
   const handleToggleScope = async (roomId: string, currentStatus: boolean) => {
     try {
       setIsToggling(roomId)
-      // Optimistic update
+      // Optimistic update — toggle both is_in_scope and is_active
       const newStatus = !currentStatus
       setRooms(prev => prev.map(r => 
-        r.id === roomId ? { ...r, is_active: newStatus } : r
+        r.id === roomId ? { ...r, is_in_scope: newStatus, is_active: newStatus } : r
       ))
       if (selectedRoom?.id === roomId) {
-        setSelectedRoom(prev => prev ? { ...prev, is_active: newStatus } : null)
+        setSelectedRoom(prev => prev ? { ...prev, is_in_scope: newStatus, is_active: newStatus } : null)
       }
 
       const result = await toggleRoomScope(roomId, newStatus)
@@ -148,9 +175,12 @@ export function RoomsTab({ project }: RoomsTabProps) {
         await fetchRooms()
         toast.error(result.error || 'Failed to toggle room scope')
       } else {
-        toast.success(newStatus ? 'Room scope shown' : 'Room scope hidden')
-        // Refresh to get updated stats
+        const action = newStatus ? 'included in' : 'excluded from'
+        toast.success(`Room ${action} scope`)
+        // Refresh to get updated stats (room totals may change in display)
         await fetchRooms()
+        // Notify EstimateTable to re-fetch (scope map + grand total changed)
+        window.dispatchEvent(new CustomEvent('estimate-updated'))
       }
     } catch (error) {
       console.error('Error toggling scope:', error)
@@ -183,6 +213,41 @@ export function RoomsTab({ project }: RoomsTabProps) {
     }
   }
 
+  const handleDimensionSave = async (dimensions: {
+    length_ft: number | null
+    width_ft: number | null
+    ceiling_height_ft: number | null
+  }) => {
+    if (!selectedRoom) return { success: false, error: 'No room selected' }
+
+    const result = await updateRoomDimensions({
+      roomId: selectedRoom.id,
+      ...dimensions,
+    })
+
+    if (result.success && result.room) {
+      // Optimistically update the selected room and room list
+      const updatedRoom = { ...selectedRoom, ...result.room }
+      setSelectedRoom(updatedRoom)
+      setRooms(prev =>
+        prev.map(r => (r.id === updatedRoom.id ? { ...r, ...result.room! } : r))
+      )
+
+      if (result.affectedLineItems && result.affectedLineItems > 0) {
+        toast.success(
+          `Dimensions saved · ${result.affectedLineItems} line item${result.affectedLineItems > 1 ? 's' : ''} updated`
+        )
+      }
+
+      // Re-fetch to get accurate stats (line item totals may have changed)
+      await fetchRooms()
+    } else {
+      toast.error(result.error || 'Failed to save dimensions')
+    }
+
+    return result
+  }
+
   const handleViewInEstimate = () => {
     if (!selectedRoom) return
     // Navigate to estimate tab with roomId query param
@@ -199,9 +264,9 @@ export function RoomsTab({ project }: RoomsTabProps) {
   }
 
   return (
-    <div className="flex h-full gap-4">
+    <div className="flex flex-col md:flex-row h-full gap-4">
       {/* Left Pane: Room List */}
-      <div className="w-1/2 space-y-4">
+      <div className="w-full md:w-1/2 space-y-4">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -211,7 +276,7 @@ export function RoomsTab({ project }: RoomsTabProps) {
                   Manage rooms and view cost breakdowns
                 </CardDescription>
               </div>
-              <Button onClick={handleAddRoom} size="sm">
+              <Button onClick={handleAddRoom} size="sm" className="min-h-[44px] md:min-h-0">
                 <Plus className="mr-2 h-4 w-4" />
                 Add Room
               </Button>
@@ -224,64 +289,116 @@ export function RoomsTab({ project }: RoomsTabProps) {
               </div>
             ) : rooms.length === 0 ? (
               <div className="py-8 text-center text-muted-foreground">
-                <p>No rooms yet. Click "Add Room" to get started.</p>
+                <p>No rooms yet. Click &quot;Add Room&quot; to get started.</p>
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Area</TableHead>
-                    <TableHead className="text-right">Total</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rooms.map((room) => (
-                    <TableRow
-                      key={room.id}
-                      className={`cursor-pointer ${
-                        selectedRoom?.id === room.id ? 'bg-muted' : ''
-                      }`}
-                      onClick={() => setSelectedRoom(room)}
-                    >
-                      <TableCell className="font-medium">{room.name}</TableCell>
-                      <TableCell>{room.type || '—'}</TableCell>
-                      <TableCell>
-                        {room.area_sqft ? `${room.area_sqft} sq ft` : '—'}
-                      </TableCell>
-                      <TableCell className="text-right font-medium">
-                        {formatCurrency(room.client_total)}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={room.is_active ? 'default' : 'secondary'}
-                        >
-                          {room.is_active ? (
-                            <>
-                              <Eye className="mr-1 h-3 w-3" />
-                              Active
-                            </>
-                          ) : (
-                            <>
-                              <EyeOff className="mr-1 h-3 w-3" />
-                              Hidden
-                            </>
-                          )}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <>
+                {/* Mobile: Card view */}
+                <div className="md:hidden space-y-2">
+                  {rooms.map((room) => {
+                    const inScope = room.is_in_scope !== false
+                    return (
+                      <div
+                        key={room.id}
+                        className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                          selectedRoom?.id === room.id ? 'bg-muted border-primary/30' : 'hover:bg-muted/50'
+                        } ${!inScope ? 'opacity-50' : ''}`}
+                        onClick={() => setSelectedRoom(room)}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium text-sm truncate">{room.name}</div>
+                            <div className="text-xs text-muted-foreground mt-0.5">
+                              {room.level || 'Unknown level'}
+                              {room.floor_area_sqft ? ` • ${Number(room.floor_area_sqft).toLocaleString()} sq ft` : ''}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <div className="text-right">
+                              <div className="text-sm font-medium">{formatCurrency(room.client_total)}</div>
+                            </div>
+                            <Switch
+                              checked={inScope}
+                              disabled={isToggling === room.id}
+                              onCheckedChange={(e) => {
+                                e // prevent card click
+                                handleToggleScope(room.id, room.is_in_scope ?? true)
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              aria-label={`Toggle ${room.name} scope`}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Desktop: Table view */}
+                <div className="hidden md:block">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Level</TableHead>
+                        <TableHead>Floor Area</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                        <TableHead>Scope</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {rooms.map((room) => {
+                        const inScope = room.is_in_scope !== false
+                        return (
+                          <TableRow
+                            key={room.id}
+                            className={`cursor-pointer ${
+                              selectedRoom?.id === room.id ? 'bg-muted' : ''
+                            } ${!inScope ? 'opacity-50' : ''}`}
+                            onClick={() => setSelectedRoom(room)}
+                          >
+                            <TableCell className="font-medium">{room.name}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{room.level || 'Unknown'}</TableCell>
+                            <TableCell>
+                              {room.floor_area_sqft
+                                ? `${Number(room.floor_area_sqft).toLocaleString()} sq ft`
+                                : room.area_sqft
+                                  ? `${Number(room.area_sqft).toLocaleString()} sq ft`
+                                  : '—'}
+                            </TableCell>
+                            <TableCell className="text-right font-medium">
+                              {formatCurrency(room.client_total)}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Switch
+                                  checked={inScope}
+                                  disabled={isToggling === room.id}
+                                  onCheckedChange={() =>
+                                    handleToggleScope(room.id, room.is_in_scope ?? true)
+                                  }
+                                  onClick={(e) => e.stopPropagation()}
+                                  aria-label={`Toggle ${room.name} scope`}
+                                />
+                                <span className={`text-xs ${inScope ? 'text-foreground' : 'text-muted-foreground'}`}>
+                                  {inScope ? 'In Scope' : 'Excluded'}
+                                </span>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
             )}
           </CardContent>
         </Card>
       </div>
 
       {/* Right Pane: Room Detail */}
-      <div className="w-1/2">
+      <div className="w-full md:w-1/2">
         {selectedRoom ? (
           <div className="space-y-4">
             {/* Room Details Card */}
@@ -291,6 +408,7 @@ export function RoomsTab({ project }: RoomsTabProps) {
                   <div>
                     <CardTitle>{selectedRoom.name}</CardTitle>
                     <CardDescription>
+                      {selectedRoom.level && `${selectedRoom.level} • `}
                       {selectedRoom.type && `${selectedRoom.type} • `}
                       {selectedRoom.line_item_count} line items
                     </CardDescription>
@@ -306,7 +424,13 @@ export function RoomsTab({ project }: RoomsTabProps) {
               </CardHeader>
               <CardContent className="space-y-6">
                 {/* Room Info */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Level</Label>
+                    <p className="text-sm font-medium">
+                      {selectedRoom.level || 'Unknown level'}
+                    </p>
+                  </div>
                   <div>
                     <Label className="text-xs text-muted-foreground">Type</Label>
                     <p className="text-sm font-medium">
@@ -314,13 +438,20 @@ export function RoomsTab({ project }: RoomsTabProps) {
                     </p>
                   </div>
                   <div>
-                    <Label className="text-xs text-muted-foreground">Area</Label>
-                    <p className="text-sm font-medium">
-                      {selectedRoom.area_sqft
-                        ? `${selectedRoom.area_sqft} sq ft`
-                        : 'Not specified'}
-                    </p>
+                    <Label className="text-xs text-muted-foreground">Scope</Label>
+                    <Badge variant={selectedRoom.is_in_scope !== false ? 'default' : 'secondary'} className="mt-0.5">
+                      {selectedRoom.is_in_scope !== false ? 'In Scope' : 'Excluded'}
+                    </Badge>
                   </div>
+                </div>
+
+                {/* Dimensions Editor (inline, auto-save) */}
+                <div className="border-t pt-4">
+                  <RoomDimensionsEditor
+                    room={selectedRoom}
+                    onSave={handleDimensionSave}
+                    disabled={selectedRoom.is_in_scope === false}
+                  />
                 </div>
 
                 {selectedRoom.notes && (
@@ -380,18 +511,20 @@ export function RoomsTab({ project }: RoomsTabProps) {
                   <div className="flex items-center justify-between">
                     <div className="space-y-0.5">
                       <Label htmlFor="toggle-scope" className="text-sm">
-                        Hide Scope
+                        {selectedRoom.is_in_scope !== false ? 'In Scope' : 'Excluded from Scope'}
                       </Label>
                       <p className="text-xs text-muted-foreground">
-                        Hide this room and remove its cost from totals
+                        {selectedRoom.is_in_scope !== false
+                          ? 'Room costs are included in all totals'
+                          : 'Room costs are excluded from all totals'}
                       </p>
                     </div>
                     <Switch
                       id="toggle-scope"
-                      checked={!selectedRoom.is_active}
+                      checked={selectedRoom.is_in_scope !== false}
                       disabled={isToggling === selectedRoom.id}
                       onCheckedChange={() =>
-                        handleToggleScope(selectedRoom.id, selectedRoom.is_active ?? true)
+                        handleToggleScope(selectedRoom.id, selectedRoom.is_in_scope ?? true)
                       }
                     />
                   </div>
@@ -437,7 +570,7 @@ export function RoomsTab({ project }: RoomsTabProps) {
 
       {/* Add/Edit Room Dialog */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {formData.id ? 'Edit Room' : 'Add Room'}
@@ -449,18 +582,40 @@ export function RoomsTab({ project }: RoomsTabProps) {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="name">
-                Room Name <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="name"
-                value={formData.name}
-                onChange={(e) =>
-                  setFormData({ ...formData, name: e.target.value })
-                }
-                placeholder="e.g., Master Bedroom"
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">
+                  Room Name <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
+                  placeholder="e.g., Master Bedroom"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="level">Level</Label>
+                <select
+                  id="level"
+                  value={formData.level}
+                  onChange={(e) =>
+                    setFormData({ ...formData, level: e.target.value })
+                  }
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  <option value="">— Select level —</option>
+                  <option value="Level 1">Level 1</option>
+                  <option value="Level 2">Level 2</option>
+                  <option value="Level 3">Level 3</option>
+                  <option value="Basement">Basement</option>
+                  <option value="Garage">Garage</option>
+                  <option value="Attic">Attic</option>
+                  <option value="Roof">Roof</option>
+                </select>
+              </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="type">Type</Label>
@@ -473,18 +628,56 @@ export function RoomsTab({ project }: RoomsTabProps) {
                 placeholder="e.g., Bedroom, Kitchen, Bathroom"
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="area">Area (sq ft)</Label>
-              <Input
-                id="area"
-                type="number"
-                value={formData.area}
-                onChange={(e) =>
-                  setFormData({ ...formData, area: e.target.value })
-                }
-                placeholder="e.g., 250"
-              />
+
+            {/* Dimensions */}
+            <div>
+              <Label className="text-sm font-semibold mb-2 block">Dimensions (ft)</Label>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="length_ft" className="text-xs text-muted-foreground">Length</Label>
+                  <Input
+                    id="length_ft"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.length_ft}
+                    onChange={(e) =>
+                      setFormData({ ...formData, length_ft: e.target.value })
+                    }
+                    placeholder="0"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="width_ft" className="text-xs text-muted-foreground">Width</Label>
+                  <Input
+                    id="width_ft"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.width_ft}
+                    onChange={(e) =>
+                      setFormData({ ...formData, width_ft: e.target.value })
+                    }
+                    placeholder="0"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ceiling_height_ft" className="text-xs text-muted-foreground">Ceiling Ht.</Label>
+                  <Input
+                    id="ceiling_height_ft"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.ceiling_height_ft}
+                    onChange={(e) =>
+                      setFormData({ ...formData, ceiling_height_ft: e.target.value })
+                    }
+                    placeholder="8"
+                  />
+                </div>
+              </div>
             </div>
+
             <div className="space-y-2">
               <Label htmlFor="notes">Notes</Label>
               <Textarea
@@ -498,14 +691,15 @@ export function RoomsTab({ project }: RoomsTabProps) {
               />
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-0">
             <Button
               variant="outline"
               onClick={() => setIsDialogOpen(false)}
+              className="min-h-[44px] md:min-h-0"
             >
               Cancel
             </Button>
-            <Button onClick={handleSaveRoom}>
+            <Button onClick={handleSaveRoom} className="min-h-[44px] md:min-h-0">
               {formData.id ? 'Update' : 'Create'}
             </Button>
           </DialogFooter>

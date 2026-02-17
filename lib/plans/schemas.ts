@@ -98,14 +98,20 @@ export type RoomType = z.infer<typeof RoomTypeSchema>
 
 /**
  * Extracted room from Pass 2
+ * Now includes level and parsed dimension fields for Phase 1
  */
 export const ExtractedRoomSchema = z.object({
   name: z.string().min(1).max(100),
+  level: z.string().max(50).nullable().optional(),  // NULL = unknown; set by room-processor from sheet
   type: RoomTypeSchema.nullable().optional(),
   area_sqft: z.number().positive().nullable().optional(),
-  dimensions: z.string().max(50).nullable().optional(),
+  length_ft: z.number().positive().nullable().optional(),
+  width_ft: z.number().positive().nullable().optional(),
+  ceiling_height_ft: z.number().positive().nullable().optional(),
+  dimensions: z.string().max(50).nullable().optional(), // Raw dimension string from plans
   notes: z.string().max(500).nullable().optional(),
   confidence: z.number().min(0).max(100).default(50),
+  sheet_label: z.string().max(200).nullable().optional(), // Original sheet title for provenance
 })
 
 export type ExtractedRoom = z.infer<typeof ExtractedRoomSchema>
@@ -140,6 +146,38 @@ export const Pass2OutputSchema = z.object({
 export type Pass2Output = z.infer<typeof Pass2OutputSchema>
 
 // =============================================================================
+// Sheet-Level Parse Result (Phase 1 deterministic pipeline)
+// =============================================================================
+
+/**
+ * Per-sheet parse result: rooms extracted from a single floor plan sheet.
+ */
+export const SheetParseResultSchema = z.object({
+  sheet_id: z.number().int().positive().describe('Page number in PDF'),
+  sheet_title: z.string().max(200),
+  detected_level: z.string().max(50),
+  classification: z.string().max(30),
+  confidence: z.number().min(0).max(100),
+  rooms: z.array(ExtractedRoomSchema),
+})
+
+export type SheetParseResult = z.infer<typeof SheetParseResultSchema>
+
+/**
+ * Complete parse output with per-sheet structure.
+ */
+export const StructuredParseOutputSchema = z.object({
+  sheets: z.array(SheetParseResultSchema),
+  all_rooms: z.array(ExtractedRoomSchema),
+  all_line_items: z.array(LineItemScaffoldSchema).optional(),
+  assumptions: z.array(z.string().max(200)),
+  missingInfo: z.array(z.string().max(200)),
+  warnings: z.array(z.string().max(200)),
+})
+
+export type StructuredParseOutput = z.infer<typeof StructuredParseOutputSchema>
+
+// =============================================================================
 // API Request/Response Schemas
 // =============================================================================
 
@@ -166,8 +204,12 @@ export const ParseResponseSchema = z.object({
   rooms: z.array(z.object({
     id: z.string().uuid(),
     name: z.string(),
+    level: z.string().default('Level 1'),
     type: z.string().nullable().optional(),
     area_sqft: z.number().nullable().optional(),
+    length_ft: z.number().nullable().optional(),
+    width_ft: z.number().nullable().optional(),
+    ceiling_height_ft: z.number().nullable().optional(),
     dimensions: z.string().nullable().optional(),
     notes: z.string().nullable().optional(),
     confidence: z.number().optional(),
@@ -186,6 +228,8 @@ export const ParseResponseSchema = z.object({
     direct_cost: z.null(),
     client_price: z.null(),
   })),
+  /** Per-sheet structured output (Phase 1 deterministic pipeline) */
+  sheets: z.array(SheetParseResultSchema).optional(),
   assumptions: z.array(z.string()),
   warnings: z.array(z.string()),
   pageClassifications: z.array(PageClassificationSchema),
@@ -205,8 +249,12 @@ export type ParseResponse = z.infer<typeof ParseResponseSchema>
  */
 export const FALLBACK_ROOM: ExtractedRoom = {
   name: 'General / Scope Notes',
+  level: 'Level 1',
   type: 'other',
   area_sqft: null,
+  length_ft: null,
+  width_ft: null,
+  ceiling_height_ft: null,
   dimensions: null,
   notes: 'We couldn\'t detect specific rooms from your plans. You can rename this room and add line items manually, or try uploading clearer floor plan pages.',
   confidence: 0,
@@ -245,6 +293,7 @@ export function createFallbackResponse(
     rooms: [{
       id: crypto.randomUUID?.() || 'fallback-room-id',
       name: FALLBACK_ROOM.name,
+      level: FALLBACK_ROOM.level ?? 'Level 1',
       type: FALLBACK_ROOM.type,
       area_sqft: FALLBACK_ROOM.area_sqft,
       dimensions: FALLBACK_ROOM.dimensions,

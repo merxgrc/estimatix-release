@@ -189,7 +189,7 @@ export default function SignupPage() {
                   required
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
+                  className="mt-1 block w-full px-3 py-2 min-h-[44px] text-base border border-border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your first name"
                 />
               </div>
@@ -206,7 +206,7 @@ export default function SignupPage() {
                   required
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
+                  className="mt-1 block w-full px-3 py-2 min-h-[44px] text-base border border-border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your last name"
                 />
               </div>
@@ -223,7 +223,7 @@ export default function SignupPage() {
                   required
                   value={companyName}
                   onChange={(e) => setCompanyName(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
+                  className="mt-1 block w-full px-3 py-2 min-h-[44px] text-base border border-border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your company name"
                 />
               </div>
@@ -239,7 +239,7 @@ export default function SignupPage() {
                   required
                   value={trade}
                   onChange={(e) => setTrade(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
+                  className="mt-1 block w-full px-3 py-2 min-h-[44px] text-base border border-border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your trade"
                 />
               </div>
@@ -256,7 +256,7 @@ export default function SignupPage() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
+                  className="mt-1 block w-full px-3 py-2 min-h-[44px] text-base border border-border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your email"
                 />
               </div>
@@ -273,7 +273,7 @@ export default function SignupPage() {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
+                  className="mt-1 block w-full px-3 py-2 min-h-[44px] text-base border border-border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Enter your password"
                 />
               </div>
@@ -290,7 +290,7 @@ export default function SignupPage() {
                   required
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-border rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-background text-foreground"
+                  className="mt-1 block w-full px-3 py-2 min-h-[44px] text-base border border-border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary bg-background text-foreground"
                   placeholder="Confirm your password"
                 />
               </div>

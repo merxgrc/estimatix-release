@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Save, AlertTriangle, Plus, Trash2, FileText, Download, BookOpen, Wrench, Edit, RotateCcw, ChevronRight, ChevronDown, Sparkles, History, Database, User, Info as InfoIcon } from 'lucide-react'
+import { Save, AlertTriangle, Plus, Trash2, FileText, Download, BookOpen, Wrench, Edit, RotateCcw, ChevronRight, ChevronDown, Sparkles, History, Database, User, Info as InfoIcon, Ruler, Pencil } from 'lucide-react'
 import { supabase } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/auth-context'
 import { SmartRoomInput } from './SmartRoomInput'
@@ -22,6 +22,9 @@ import type { EstimateStatus } from '@/types/db'
 import { mergeEstimateItems, type EstimateItem } from '@/lib/estimate-utils'
 import { toast } from 'sonner'
 import { Lock } from 'lucide-react'
+import { rederiveLineItemQuantity, setLineItemCalcSourceManual } from '@/actions/rooms'
+import { updateLineItem as serverUpdateLineItem, type UpdateLineItemPatch } from '@/actions/estimate-line-items'
+import { isAreaBasedItem, getAreaFieldLabel, resolveAreaFieldForLineItem } from '@/lib/area-mapping'
 
 // Unit options
 const UNIT_OPTIONS = ['EA', 'SF', 'LF', 'SQ', 'ROOM']
@@ -72,6 +75,11 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
   // Track original AI values for reset functionality
   const originalValuesRef = useRef<Map<string, Partial<LineItem>>>(new Map())
   
+  // =============================================================================
+  // Room scope map: roomId → is_in_scope (for filtering excluded rooms from totals)
+  // =============================================================================
+  const [roomScopeMap, setRoomScopeMap] = useState<Map<string, boolean>>(new Map())
+
   // =============================================================================
   // EDIT LOCK: Estimates are locked when status != 'draft'
   // =============================================================================
@@ -176,6 +184,20 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
   const loadLineItems = useCallback(async () => {
     if (estimateId && projectId) {
       try {
+        // Also fetch room scope data for this project
+        const { data: roomsData } = await supabase
+          .from('rooms')
+          .select('id, is_in_scope')
+          .eq('project_id', projectId)
+
+        if (roomsData) {
+          const scopeMap = new Map<string, boolean>()
+          for (const r of roomsData) {
+            scopeMap.set(r.id, r.is_in_scope ?? true)
+          }
+          setRoomScopeMap(scopeMap)
+        }
+
         const { data, error } = await supabase
           .from('estimate_line_items')
           .select('*, price_source')
@@ -216,6 +238,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
             return {
               id: item.id,
               room_name: item.room_name || '', // Preserve room_name from database
+              room_id: item.room_id || null,
               description: item.description || '',
               category: item.category || costCodes.find(c => c.code === item.cost_code)?.label || 'Other',
               cost_code: item.cost_code || null, // Preserve cost_code from database, don't force 999
@@ -230,7 +253,8 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
               pricing_source: item.pricing_source || null,
               price_source: (item as any).price_source || item.pricing_source || null,
               confidence: item.confidence ?? null,
-              is_allowance: isAllowance
+              is_allowance: isAllowance,
+              calc_source: (item.calc_source as 'manual' | 'room_dimensions') || 'manual',
             }
           })
           setItems(loadedItems)
@@ -330,13 +354,27 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     itemsRef.current = items
   }, [items])
 
-  // Save individual line item to database (debounced)
-  const saveLineItem = async (itemId: string | undefined, item: LineItem) => {
-    if (!itemId || !estimateId || !projectId) return
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SAVE (debounced, via server action with Zod validation + server-side calc)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // The server action:
+  //   1. Validates the patch with Zod
+  //   2. Merges with the stored row
+  //   3. Recomputes direct_cost + client_price server-side
+  //   4. Writes to DB
+  //   5. Refreshes estimates.total (SUM of all in-scope items)
+  //   6. Returns computed fields for client reconciliation
+  //
+  // The client:
+  //   - Optimistically updates state immediately (in updateItem)
+  //   - Debounces the server call (800ms)
+  //   - On server response, reconciles any discrepancies (server wins)
+  // ═══════════════════════════════════════════════════════════════════════════
 
-    // =============================================================================
+  const saveLineItem = async (itemId: string | undefined, item: LineItem) => {
+    if (!itemId || itemId.startsWith('temp-') || !estimateId || !projectId) return
+
     // EDIT LOCK: Block saves when estimate is not in draft status
-    // =============================================================================
     if (isLocked) {
       console.warn(`saveLineItem blocked: estimate is locked (status=${estimateStatus})`)
       return
@@ -348,85 +386,107 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       clearTimeout(existingTimeout)
     }
 
-    // Set new timeout for debounced save
+    // Set new timeout for debounced save (800ms — fast enough to feel instant,
+    // slow enough to batch rapid keystrokes)
     const timeout = setTimeout(async () => {
       try {
-        const updateData: any = {
+        const patch: UpdateLineItemPatch = {
           room_name: item.room_name || null,
-          description: item.description || null,
-          category: item.category || null,
+          room_id: item.room_id || null,
+          description: item.description || undefined,
+          category: item.category || undefined,
           cost_code: item.cost_code || null,
-          quantity: item.quantity || 1,
-          unit: item.unit || 'EA',
-          // Preserve null for unpriced items (null means "unpriced", 0 means "$0")
+          quantity: item.quantity ?? null,
+          unit: item.unit || undefined,
           labor_cost: item.labor_cost ?? null,
           material_cost: item.material_cost ?? null,
           overhead_cost: item.overhead_cost ?? null,
           direct_cost: item.direct_cost ?? null,
           margin_percent: item.margin_percent || 30,
           client_price: item.client_price ?? null,
-          pricing_source: item.pricing_source || null, // Preserve existing source (manual if user edited, otherwise original)
-          confidence: item.confidence ?? null
+          pricing_source: (item.pricing_source as UpdateLineItemPatch['pricing_source']) || null,
+          calc_source: item.calc_source || 'manual',
+          is_allowance: item.is_allowance ?? null,
         }
 
-        const { error } = await supabase
-          .from('estimate_line_items')
-          .update(updateData)
-          .eq('id', itemId)
+        const result = await serverUpdateLineItem(itemId, patch)
 
-        if (error) {
-          console.error(`Error saving line item ${itemId}:`, error)
+        if (!result.success) {
+          console.error(`[saveLineItem] Server error for ${itemId}:`, result.error)
+          toast.error(result.error || 'Failed to save item')
+          return
+        }
+
+        // ── Reconcile: server-computed fields win ──
+        if (result.item) {
+          setItems(prev => {
+            const idx = prev.findIndex(i => i.id === itemId)
+            if (idx === -1) return prev
+            const next = [...prev]
+            const current = next[idx]
+            // Only reconcile if the item hasn't been edited again since this save fired
+            // (check by comparing values that the server computed)
+            next[idx] = {
+              ...current,
+              direct_cost: result.item!.direct_cost,
+              client_price: result.item!.client_price,
+              margin_percent: result.item!.margin_percent,
+              calc_source: result.item!.calc_source,
+            }
+            return next
+          })
         }
       } catch (err) {
         console.error(`Error in saveLineItem for ${itemId}:`, err)
       } finally {
         saveTimeoutRef.current.delete(itemId)
       }
-    }, 1000) // 1 second debounce
+    }, 800) // 800ms debounce
 
     saveTimeoutRef.current.set(itemId, timeout)
   }
 
-  // Recalculate pricing when margin changes
-  const recalculateMargin = async (itemId: string, margin: number) => {
-    if (!itemId) return
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CLIENT-SIDE TOTAL COMPUTATION (mirrors server formula for optimistic UI)
+  // ═══════════════════════════════════════════════════════════════════════════
+  //   direct_cost = labor_cost + material_cost + overhead_cost
+  //   client_price = direct_cost × (1 + margin_percent / 100)
+  //   For allowances: client_price = direct_cost, margin = 0
+  // ═══════════════════════════════════════════════════════════════════════════
+  const computeClientTotals = useCallback((item: LineItem, opts?: {
+    directCostExplicit?: boolean
+    clientPriceExplicit?: boolean
+  }): { direct_cost: number | null; client_price: number | null } => {
+    const labor = item.labor_cost ?? 0
+    const material = item.material_cost ?? 0
+    const overhead = item.overhead_cost ?? 0
+    const isAllowance = item.is_allowance || (item.description || '').toUpperCase().startsWith('ALLOWANCE:')
 
-    try {
-      const response = await fetch(`/api/pricing/recalculate/${itemId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ margin }),
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        console.error('Error recalculating margin:', errorData)
-        return
-      }
-
-      const result = await response.json()
-
-      // Update the item in state with new values
-      setItems(prevItems => {
-        const newItems = [...prevItems]
-        const index = newItems.findIndex(item => item.id === itemId)
-        if (index !== -1) {
-          newItems[index] = {
-            ...newItems[index],
-            margin_percent: result.margin_percent,
-            overhead_cost: result.overhead_cost,
-            direct_cost: result.direct_cost,
-            client_price: result.client_price
-          }
-        }
-        return newItems
-      })
-    } catch (err) {
-      console.error('Error in recalculateMargin:', err)
+    // 1. direct_cost
+    let directCost: number | null
+    if (opts?.directCostExplicit) {
+      directCost = item.direct_cost ?? null
+    } else if (labor !== 0 || material !== 0 || overhead !== 0) {
+      directCost = Math.round((labor + material + overhead) * 100) / 100
+    } else {
+      directCost = item.direct_cost ?? null
     }
-  }
+
+    // 2. client_price
+    let clientPrice: number | null
+    if (isAllowance) {
+      clientPrice = directCost
+    } else if (opts?.clientPriceExplicit) {
+      clientPrice = item.client_price ?? null
+    } else if (directCost !== null && directCost !== 0) {
+      const margin = item.margin_percent ?? 0
+      clientPrice = Math.round(directCost * (1 + margin / 100) * 100) / 100
+    } else {
+      clientPrice = item.client_price ?? null
+    }
+
+    return { direct_cost: directCost, client_price: clientPrice }
+  }, [])
 
   // Validate numeric input (0-1M)
   const validateNumeric = (value: string): number => {
@@ -470,104 +530,129 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     })
   }
 
-  // Auto-calculate client_price when labor_cost, margin_percent, quantity, or unit changes
+  // Toggle calc_source between 'manual' and 'room_dimensions'
+  const toggleCalcSource = async (index: number) => {
+    const item = items[index]
+    if (!item.id || item.id.startsWith('temp-')) {
+      toast.error('Save the item first before toggling auto-calculation.')
+      return
+    }
+
+    const currentSource = item.calc_source || 'manual'
+
+    if (currentSource === 'manual') {
+      // Switch to room_dimensions → re-derive quantity from room area
+      toast.loading('Re-deriving quantity from room dimensions...', { id: 'calc-toggle' })
+      const result = await rederiveLineItemQuantity(item.id)
+      toast.dismiss('calc-toggle')
+
+      if (result.success) {
+        setItems(prev => {
+          const next = [...prev]
+          next[index] = {
+            ...next[index],
+            quantity: result.quantity ?? next[index].quantity,
+            direct_cost: result.direct_cost ?? next[index].direct_cost,
+            calc_source: 'room_dimensions',
+          }
+          return next
+        })
+        const areaLabel = result.area_field ? getAreaFieldLabel(result.area_field as any) : 'Room Area'
+        toast.success(`Quantity auto-set from ${areaLabel}: ${result.quantity?.toLocaleString() ?? '—'} SQFT`)
+      } else {
+        toast.error(result.error || 'Failed to re-derive quantity')
+      }
+    } else {
+      // Switch to manual → keep current quantity, stop auto-updating
+      const result = await setLineItemCalcSourceManual(item.id)
+      if (result.success) {
+        setItems(prev => {
+          const next = [...prev]
+          next[index] = { ...next[index], calc_source: 'manual' }
+          return next
+        })
+        toast.success('Quantity is now manual. Edit freely.')
+      } else {
+        toast.error(result.error || 'Failed to switch to manual')
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // updateItem — Optimistic client update + debounced server save
+  //
+  // 1. Merges `updates` into the item at `index`
+  // 2. Re-derives direct_cost & client_price using the SAME formula as server
+  // 3. Updates state immediately (optimistic) → totals recompute via React
+  // 4. Queues a debounced server save that reconciles on response
+  // ═══════════════════════════════════════════════════════════════════════════
   const updateItem = (index: number, updates: Partial<LineItem>, immediateSave = false) => {
     setItems(prevItems => {
       const newItems = [...prevItems]
       const item = { ...newItems[index] }
-      
+
       // Apply updates
       Object.assign(item, updates)
-      
+
+      // If user edits quantity, switch calc_source to 'manual'
+      if (updates.quantity !== undefined && item.calc_source === 'room_dimensions') {
+        item.calc_source = 'manual'
+      }
+
       // Mark as manual if user edits cost fields
-      if (updates.labor_cost !== undefined || updates.material_cost !== undefined || 
-          updates.overhead_cost !== undefined || updates.direct_cost !== undefined || 
+      if (updates.labor_cost !== undefined || updates.material_cost !== undefined ||
+          updates.overhead_cost !== undefined || updates.direct_cost !== undefined ||
           updates.client_price !== undefined) {
         item.pricing_source = 'manual'
       }
-      
-      // Check if item is an allowance (from is_allowance field or description starts with "ALLOWANCE:")
-      const isAllowance = updates.is_allowance !== undefined 
-        ? updates.is_allowance 
+
+      // Allowance check
+      const isAllowance = updates.is_allowance !== undefined
+        ? updates.is_allowance
         : (item.is_allowance || (item.description || '').toUpperCase().startsWith('ALLOWANCE:'))
-      
-      // Update is_allowance field
-      if (isAllowance !== undefined) {
-        item.is_allowance = isAllowance
-      }
-      
-      // For allowances: ensure margin is 0 and client_price = direct_cost
-      if (isAllowance) {
-        item.margin_percent = 0
-        
-        // Calculate direct_cost if needed
-        const directCost = updates.direct_cost !== undefined 
-          ? updates.direct_cost 
-          : (item.direct_cost || (item.labor_cost || 0) + (item.material_cost || 0) + (item.overhead_cost || 0))
-        
-        item.direct_cost = directCost
-        item.client_price = directCost // Allowances: client_price = direct_cost (no markup)
-      } else {
-        // Auto-calculate client_price if labor_cost, margin_percent, quantity, or unit changed
-        // But only if client_price wasn't manually edited and item is not manually overridden
-        if ((updates.labor_cost !== undefined || updates.margin_percent !== undefined || 
-            updates.quantity !== undefined || updates.unit !== undefined || 
-            updates.direct_cost !== undefined || updates.material_cost !== undefined ||
-            updates.overhead_cost !== undefined) &&
-            updates.client_price === undefined && item.pricing_source !== 'manual') {
-          // Calculate direct_cost if it's not provided
-          const directCost = updates.direct_cost !== undefined 
-            ? updates.direct_cost 
-            : (item.direct_cost ?? (
-                ((updates.labor_cost ?? item.labor_cost) ?? 0) +
-                ((updates.material_cost ?? item.material_cost) ?? 0) +
-                ((updates.overhead_cost ?? item.overhead_cost) ?? 0)
-              ))
-          
-          const marginPercent = updates.margin_percent !== undefined ? updates.margin_percent : item.margin_percent || 30
-          
-          // Calculate: client_price = direct_cost * (1 + margin/100)
-          // Handle edge case where margin is 0 or NaN
-          if (marginPercent > 0 && !isNaN(marginPercent)) {
-            item.client_price = Number(directCost) * (1 + Number(marginPercent) / 100)
-          } else {
-            item.client_price = Number(directCost) // No markup
-          }
-          
-          // Update direct_cost if calculated
-          if (updates.direct_cost === undefined && !item.direct_cost) {
-            item.direct_cost = directCost
-          }
+      item.is_allowance = isAllowance ?? false
+      if (isAllowance) item.margin_percent = 0
+
+      // Recompute direct_cost + client_price (matches server formula)
+      const isCostFieldEdit = (
+        updates.labor_cost !== undefined || updates.material_cost !== undefined ||
+        updates.overhead_cost !== undefined || updates.direct_cost !== undefined ||
+        updates.margin_percent !== undefined || updates.quantity !== undefined ||
+        updates.is_allowance !== undefined
+      )
+      const isClientPriceEdit = updates.client_price !== undefined
+
+      if (isCostFieldEdit || isClientPriceEdit) {
+        const { direct_cost, client_price } = computeClientTotals(item, {
+          directCostExplicit: updates.direct_cost !== undefined,
+          clientPriceExplicit: updates.client_price !== undefined,
+        })
+        item.direct_cost = direct_cost
+        // Only overwrite client_price if user didn't explicitly set it
+        if (!isClientPriceEdit) {
+          item.client_price = client_price
+        } else {
+          item.client_price = updates.client_price ?? client_price
         }
       }
-      
-      // Final validation: ensure client_price is not NaN or 0 when we have valid costs
-      const finalDirectCost = item.direct_cost ?? ((item.labor_cost ?? 0) + (item.material_cost ?? 0) + (item.overhead_cost ?? 0))
-      if ((item.client_price == null || isNaN(item.client_price) || item.client_price === 0) && finalDirectCost > 0 && !isAllowance) {
-        const margin = item.margin_percent || 30
-        item.client_price = finalDirectCost * (1 + margin / 100)
-      }
-      
+
       newItems[index] = item
-      
+
       // Update ref with latest items
       itemsRef.current = newItems
-      
+
       // Trigger save (debounced unless immediate)
       if (item.id) {
         if (immediateSave) {
-          // Clear existing timeout and save immediately
           const existingTimeout = saveTimeoutRef.current.get(item.id)
           if (existingTimeout) {
             clearTimeout(existingTimeout)
             saveTimeoutRef.current.delete(item.id)
           }
-          saveLineItem(item.id, item)
-        } else {
-          saveLineItem(item.id, item)
         }
+        saveLineItem(item.id, item)
       }
-      
+
       return newItems
     })
   }
@@ -645,9 +730,37 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
 
   // =============================================================================
   // TOTALS: Treat null as 0 for summation, but track unpriced items separately
+  // Filter out items from rooms that are excluded from scope (is_in_scope = false)
   // =============================================================================
-  const grandTotal = items.reduce((sum, item) => sum + (item.client_price ?? 0), 0)
-  const unpricedItemCount = items.filter(item => item.direct_cost === null || item.direct_cost === undefined).length
+  const isItemInScope = useCallback((item: LineItem): boolean => {
+    if (!item.room_id) return true // No room → always in scope
+    return roomScopeMap.get(item.room_id) !== false
+  }, [roomScopeMap])
+
+  const grandTotal = items.reduce((sum, item) => {
+    if (!isItemInScope(item)) return sum
+    return sum + (item.client_price ?? 0)
+  }, 0)
+  const unpricedItemCount = items.filter(item => isItemInScope(item) && (item.direct_cost === null || item.direct_cost === undefined)).length
+  const excludedItemCount = items.filter(item => !isItemInScope(item)).length
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ROOM SUBTOTALS — client-derived from line item client_price values.
+  // Recomputes on every items state change (React memoization-friendly).
+  // key = room_name (lowercase), value = { total, count, room_name }
+  // ═══════════════════════════════════════════════════════════════════════════
+  const roomTotals = React.useMemo(() => {
+    const map = new Map<string, { total: number; count: number; room_name: string }>()
+    for (const item of items) {
+      if (!isItemInScope(item)) continue
+      const key = (item.room_name || 'Unassigned').toLowerCase()
+      const existing = map.get(key) || { total: 0, count: 0, room_name: item.room_name || 'Unassigned' }
+      existing.total += (item.client_price ?? 0)
+      existing.count += 1
+      map.set(key, existing)
+    }
+    return map
+  }, [items, isItemInScope])
 
   // Get title from description (first 50 chars or first sentence)
   const getTitle = (description: string): string => {
@@ -999,6 +1112,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           estimate_id: currentEstimateId,
           project_id: projectId,
           room_name: item.room_name || null,
+          room_id: item.room_id || null,
           description: item.description || null,
           category: categoryInfo.label,
           cost_code: item.cost_code || null, // Don't force 999 - preserve null if not set
@@ -1011,7 +1125,8 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           direct_cost: item.direct_cost ?? null,
           margin_percent: item.margin_percent || 30,
           client_price: item.client_price ?? null,
-          pricing_source: item.pricing_source || null
+          pricing_source: item.pricing_source || null,
+          calc_source: item.calc_source || 'manual',
         }
         
         // Only include id if it exists and is a valid UUID (not temp-*)
@@ -1217,21 +1332,26 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       {/* Estimate Table */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <CardTitle>Project Estimate</CardTitle>
-              <CardDescription className="flex items-center gap-2">
+              <CardDescription className="flex items-center gap-2 flex-wrap">
                 <span>{items.length} line items • Total: ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 {unpricedItemCount > 0 && (
                   <span className="text-amber-600 font-medium">
                     • {unpricedItemCount} unpriced
                   </span>
                 )}
+                {excludedItemCount > 0 && (
+                  <span className="text-orange-600 font-medium">
+                    • {excludedItemCount} excluded
+                  </span>
+                )}
               </CardDescription>
             </div>
-            <div className="flex gap-2">
-              <Button onClick={addItem} variant="outline" size="sm" disabled={isLocked}>
-                <Plus className="mr-2 h-4 w-4" />
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={addItem} variant="outline" size="sm" disabled={isLocked} className="min-h-[44px] md:min-h-0">
+                <Plus className="mr-1 md:mr-2 h-4 w-4" />
                 Add Item
               </Button>
               <Button 
@@ -1239,33 +1359,36 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                 disabled={isGeneratingSpecSheet}
                 variant="outline"
                 size="sm"
+                className="min-h-[44px] md:min-h-0"
               >
                 {isGeneratingSpecSheet ? (
                   <>
-                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                    Generating...
+                    <div className="mr-1 md:mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                    <span className="hidden sm:inline">Generating...</span>
+                    <span className="sm:hidden">Gen...</span>
                   </>
                 ) : (
                   <>
-                    <FileText className="mr-2 h-4 w-4" />
-                    Generate Spec Sheet
+                    <FileText className="mr-1 md:mr-2 h-4 w-4" />
+                    <span className="hidden sm:inline">Generate Spec Sheet</span>
+                    <span className="sm:hidden">Spec Sheet</span>
                   </>
                 )}
               </Button>
               <Button 
                 onClick={handleSmartSave} 
                 disabled={isSaving}
-                className="bg-green-600 hover:bg-green-700"
+                className="bg-green-600 hover:bg-green-700 min-h-[44px] md:min-h-0"
               >
                 {isSaving ? (
                   <>
-                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    <div className="mr-1 md:mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
                     Saving...
                   </>
                 ) : (
                   <>
-                    <Save className="mr-2 h-4 w-4" />
-                    Save Estimate
+                    <Save className="mr-1 md:mr-2 h-4 w-4" />
+                    Save
                   </>
                 )}
               </Button>
@@ -1307,11 +1430,296 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
 
           {items.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              <p className="mb-2">No items yet. Click "Add Item" to get started.</p>
-              <p className="text-sm">After adding items, fill in the description and select a cost code, then click "Save Estimate" to save them.</p>
+              <p className="mb-2">No items yet. Click &quot;Add Item&quot; to get started.</p>
+              <p className="text-sm">After adding items, fill in the description and select a cost code, then click &quot;Save Estimate&quot; to save them.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            {/* ====== MOBILE CARD VIEW (< md) ====== */}
+            <div className="md:hidden space-y-3">
+              {items.map((item, index) => {
+                const itemId = item.id || `temp-${index}`
+                const isExpanded = expandedRows.has(itemId)
+                const costInfo = COST_CATEGORIES.find(c => c.code === item.cost_code)
+                const costCodeLabel = costInfo?.label || (item.cost_code || 'Unassigned')
+                const isAIGenerated = item.pricing_source === 'task_library' || item.pricing_source === 'user_library'
+                const itemInScope = isItemInScope(item)
+
+                return (
+                  <div key={`mobile-${itemId}`} className={cn("border rounded-lg p-3 space-y-3 bg-card", !itemInScope && "opacity-50 border-dashed")}>
+                    {/* Card Header: title + expand toggle */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-sm font-medium truncate">{getTitle(item.description)}</span>
+                          {isAIGenerated && (
+                            <Badge variant="outline" className="h-5 px-1.5 text-xs shrink-0">
+                              <Sparkles className="h-3 w-3 mr-1" />AI
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span>{item.room_name || 'No room'}</span>
+                          <span>•</span>
+                          <span>{costCodeLabel}</span>
+                          {!itemInScope && (
+                            <>
+                              <span>•</span>
+                              <Badge variant="outline" className="h-4 px-1 text-[10px] text-orange-600 border-orange-300 bg-orange-50">Excluded</Badge>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className={cn("text-sm font-semibold", itemInScope ? "text-green-700" : "text-muted-foreground line-through")}>
+                          ${(item.client_price ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Editable fields in a compact grid */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Label className="text-xs text-muted-foreground">Qty</Label>
+                          {/* Calc source badge on mobile */}
+                          {item.room_id && isAreaBasedItem({
+                            cost_code: item.cost_code,
+                            unit: item.unit,
+                            description: item.description,
+                            category: item.category,
+                          }) && (
+                            <button
+                              type="button"
+                              onClick={() => !isLocked && toggleCalcSource(index)}
+                              className={cn(
+                                "flex items-center gap-0.5 h-5 px-1.5 rounded text-[10px] border cursor-pointer",
+                                item.calc_source === 'room_dimensions'
+                                  ? "bg-blue-50 text-blue-700 border-blue-200"
+                                  : "bg-gray-50 text-gray-500 border-gray-200"
+                              )}
+                              disabled={isLocked}
+                            >
+                              {item.calc_source === 'room_dimensions' ? (
+                                <><Ruler className="h-2.5 w-2.5" />Auto</>
+                              ) : (
+                                <><Pencil className="h-2.5 w-2.5" />Manual</>
+                              )}
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Input
+                            type="number"
+                            value={item.quantity || 1}
+                            onChange={(e) => updateItem(index, { quantity: Number(e.target.value) || 1 })}
+                            onBlur={() => {
+                              const currentItem = itemsRef.current[index]
+                              if (currentItem?.id) saveLineItem(currentItem.id, currentItem)
+                            }}
+                            className="h-10 text-sm text-center tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            min="0" step="0.01" disabled={isLocked}
+                          />
+                          <Select value={item.unit || 'EA'} onValueChange={(value) => updateItem(index, { unit: value })} disabled={isLocked}>
+                            <SelectTrigger className="h-10 text-xs w-[65px]"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {UNIT_OPTIONS.map(unit => (<SelectItem key={unit} value={unit}>{unit}</SelectItem>))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-xs text-muted-foreground mb-1 block">Direct Cost</Label>
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-muted-foreground">$</span>
+                          <Input
+                            type="number"
+                            value={item.direct_cost ?? ''}
+                            placeholder="0.00"
+                            onChange={(e) => {
+                              const rawValue = e.target.value
+                              const value = rawValue === '' ? null : validateNumeric(rawValue)
+                              updateItem(index, { direct_cost: value })
+                            }}
+                            onBlur={() => {
+                              const currentItem = itemsRef.current[index]
+                              if (currentItem?.id) saveLineItem(currentItem.id, currentItem)
+                            }}
+                            className="h-10 text-sm text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            min="0" step="0.01" disabled={isLocked}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-xs text-muted-foreground mb-1 block">Margin %</Label>
+                        {(() => {
+                          const isAllowance = item.is_allowance || (item.description || '').toUpperCase().startsWith('ALLOWANCE:')
+                          const marginValue = isAllowance ? 0 : (item.margin_percent || 30)
+                          return (
+                            <div className="flex items-center gap-1">
+                              <Input
+                                type="number"
+                                value={marginValue}
+                                min={0} max={60}
+                                disabled={isAllowance || isLocked}
+                                onChange={(e) => {
+                                  if (!isAllowance) updateItem(index, { margin_percent: Number(e.target.value) || 0 })
+                                }}
+                                onBlur={() => {
+                                  if (!isAllowance) {
+                                    const currentItem = itemsRef.current[index]
+                                    if (currentItem?.id) saveLineItem(currentItem.id, currentItem)
+                                  }
+                                }}
+                                className="h-10 text-sm text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              />
+                              <span className="text-xs text-muted-foreground">%</span>
+                            </div>
+                          )
+                        })()}
+                      </div>
+                      <div>
+                        <Label className="text-xs text-muted-foreground mb-1 block">Client Price</Label>
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-green-700 font-semibold">$</span>
+                          <Input
+                            type="number"
+                            value={item.client_price ?? ''}
+                            placeholder="—"
+                            onChange={(e) => {
+                              const rawValue = e.target.value
+                              const value = rawValue === '' ? null : validateNumeric(rawValue)
+                              updateItem(index, { client_price: value })
+                            }}
+                            onBlur={() => {
+                              const currentItem = itemsRef.current[index]
+                              if (currentItem?.id) saveLineItem(currentItem.id, currentItem)
+                            }}
+                            className={cn(
+                              "h-10 text-sm text-right font-semibold tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
+                              item.client_price != null ? "text-green-700" : "text-muted-foreground"
+                            )}
+                            min="0" step="0.01" disabled={isLocked}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Expandable details */}
+                    <button
+                      type="button"
+                      onClick={() => toggleRow(itemId)}
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground w-full min-h-[36px]"
+                    >
+                      {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                      {isExpanded ? 'Hide Details' : 'Show Details'}
+                    </button>
+
+                    {isExpanded && (
+                      <div className="space-y-3 pt-2 border-t">
+                        <div>
+                          <Label className="text-xs text-muted-foreground mb-1 block">Description</Label>
+                          <DescriptionTextarea
+                            value={item.description}
+                            onChange={(value) => updateItem(index, { description: value }, false)}
+                            onBlur={() => {
+                              const currentItem = itemsRef.current[index]
+                              if (currentItem?.id) saveLineItem(currentItem.id, currentItem)
+                            }}
+                            placeholder="Full item description..."
+                            disabled={isLocked}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-muted-foreground mb-1 block">Room</Label>
+                          <SmartRoomInput
+                            value={item.room_name || ''}
+                            onChange={(value) => updateItem(index, { room_name: value })}
+                            onBlur={() => {
+                              if (item.id) saveLineItem(item.id, items[index])
+                            }}
+                            placeholder="Room"
+                            options={ROOM_OPTIONS}
+                            disabled={isLocked}
+                          />
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div>
+                            <Label className="text-xs text-muted-foreground mb-1 block">Labor</Label>
+                            <Input
+                              type="number"
+                              value={item.labor_cost ?? ''}
+                              placeholder="—"
+                              onChange={(e) => {
+                                const value = e.target.value === '' ? null : validateNumeric(e.target.value)
+                                updateItem(index, { labor_cost: value })
+                              }}
+                              onBlur={() => {
+                                const currentItem = itemsRef.current[index]
+                                if (currentItem?.id) saveLineItem(currentItem.id, currentItem)
+                              }}
+                              className="h-10 text-sm text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              min="0" step="0.01" disabled={isLocked}
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs text-muted-foreground mb-1 block">Material</Label>
+                            <Input
+                              type="number"
+                              value={item.material_cost ?? ''}
+                              placeholder="—"
+                              onChange={(e) => {
+                                const value = e.target.value === '' ? null : validateNumeric(e.target.value)
+                                updateItem(index, { material_cost: value })
+                              }}
+                              onBlur={() => {
+                                const currentItem = itemsRef.current[index]
+                                if (currentItem?.id) saveLineItem(currentItem.id, currentItem)
+                              }}
+                              className="h-10 text-sm text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              min="0" step="0.01" disabled={isLocked}
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs text-muted-foreground mb-1 block">Overhead</Label>
+                            <Input
+                              type="number"
+                              value={item.overhead_cost ?? ''}
+                              placeholder="—"
+                              onChange={(e) => {
+                                const value = e.target.value === '' ? null : validateNumeric(e.target.value)
+                                updateItem(index, { overhead_cost: value })
+                              }}
+                              onBlur={() => {
+                                const currentItem = itemsRef.current[index]
+                                if (currentItem?.id) saveLineItem(currentItem.id, currentItem)
+                              }}
+                              className="h-10 text-sm text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              min="0" step="0.01" disabled={isLocked}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex justify-end">
+                          <Button
+                            onClick={() => removeItem(index)}
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive hover:bg-destructive/10 min-h-[44px]"
+                            disabled={isLocked}
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* ====== DESKTOP TABLE VIEW (>= md) ====== */}
+            <div className="hidden md:block overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1333,11 +1741,12 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                     const costCodeLabel = costInfo?.label || (item.cost_code || 'Unassigned')
                     const isAIGenerated = item.pricing_source === 'task_library' || item.pricing_source === 'user_library'
                     const isManualOverride = item.pricing_source === 'manual' || (!item.pricing_source && item.labor_cost !== 0)
+                    const desktopItemInScope = isItemInScope(item)
                     
                     return (
                       <React.Fragment key={itemId}>
                         {/* Primary Row - Always Visible */}
-                        <TableRow className="hover:bg-muted/30">
+                        <TableRow className={cn("hover:bg-muted/30", !desktopItemInScope && "opacity-50")}>
                           <TableCell className="py-1 px-2 w-8">
                             <Button
                               variant="ghost"
@@ -1354,9 +1763,14 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                           </TableCell>
                           <TableCell className="py-1 px-2 max-w-[200px]">
                             <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium truncate" title={item.description}>
+                              <span className={cn("text-sm font-medium truncate", !desktopItemInScope && "line-through")} title={item.description}>
                                 {getTitle(item.description)}
                               </span>
+                              {!desktopItemInScope && (
+                                <Badge variant="outline" className="h-5 px-1 text-[10px] text-orange-600 border-orange-300 bg-orange-50 shrink-0">
+                                  Excluded
+                                </Badge>
+                              )}
                               {isAIGenerated && (
                                 <Badge variant="outline" className="h-5 px-1.5 text-xs">
                                   <Sparkles className="h-3 w-3 mr-1" />
@@ -1413,7 +1827,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                             </Select>
                           </TableCell>
                           <TableCell className="py-1 px-2">
-                            <div className="flex items-center gap-1 min-w-[90px]">
+                            <div className="flex items-center gap-1 min-w-[110px]">
                               <Input
                                 type="number"
                                 value={item.quantity || 1}
@@ -1427,7 +1841,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                     saveLineItem(currentItem.id, currentItem)
                                   }
                                 }}
-                                className="h-7 w-12 text-xs text-center tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                className="h-7 w-14 text-xs text-center tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 min="0"
                                 step="0.01"
                                 disabled={isLocked}
@@ -1446,6 +1860,53 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                   ))}
                                 </SelectContent>
                               </Select>
+                              {/* Calc source badge + toggle */}
+                              {item.room_id && isAreaBasedItem({
+                                cost_code: item.cost_code,
+                                unit: item.unit,
+                                description: item.description,
+                                category: item.category,
+                              }) && (
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <button
+                                        type="button"
+                                        onClick={() => !isLocked && toggleCalcSource(index)}
+                                        className={cn(
+                                          "flex items-center gap-0.5 h-5 px-1 rounded text-[10px] border cursor-pointer transition-colors",
+                                          item.calc_source === 'room_dimensions'
+                                            ? "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
+                                            : "bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100"
+                                        )}
+                                        disabled={isLocked}
+                                      >
+                                        {item.calc_source === 'room_dimensions' ? (
+                                          <><Ruler className="h-2.5 w-2.5" />Auto</>
+                                        ) : (
+                                          <><Pencil className="h-2.5 w-2.5" />Man</>
+                                        )}
+                                      </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-[200px]">
+                                      {item.calc_source === 'room_dimensions' ? (
+                                        <p className="text-xs">
+                                          Qty auto-derived from room {(() => {
+                                            const field = resolveAreaFieldForLineItem({ cost_code: item.cost_code, unit: item.unit, description: item.description, category: item.category })
+                                            return field ? getAreaFieldLabel(field).toLowerCase() : 'area'
+                                          })()}.
+                                          Click to switch to manual.
+                                        </p>
+                                      ) : (
+                                        <p className="text-xs">
+                                          Qty is manually set.
+                                          Click to auto-derive from room dimensions.
+                                        </p>
+                                      )}
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              )}
                             </div>
                           </TableCell>
                           <TableCell className="text-right py-1 px-2">
@@ -1552,13 +2013,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                                       onBlur={() => {
                                         if (!isAllowance) {
                                           const currentItem = itemsRef.current[index]
-                                          if (currentItem?.id) {
-                                            if (currentItem.pricing_source !== 'manual') {
-                                              recalculateMargin(currentItem.id, currentItem.margin_percent || 30)
-                                            } else {
-                                              saveLineItem(currentItem.id, currentItem)
-                                            }
-                                          }
+                                          if (currentItem?.id) saveLineItem(currentItem.id, currentItem)
                                         }
                                       }}
                                       className={cn(
@@ -1789,18 +2244,44 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                 </TableBody>
               </Table>
             </div>
+            </>
           )}
 
-          {/* Grand Total */}
+          {/* Room Subtotals + Grand Total */}
           {items.length > 0 && (
-            <div className="mt-6 pt-4 border-t">
-              <div className="flex justify-end">
+            <div className="mt-6 pt-4 border-t space-y-4">
+              {/* Room Subtotals */}
+              {roomTotals.size > 1 && (
+                <div className="space-y-1">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Room Totals</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-1">
+                    {Array.from(roomTotals.entries())
+                      .sort((a, b) => b[1].total - a[1].total)
+                      .map(([key, { total, count, room_name }]) => (
+                        <div key={key} className="flex items-center justify-between text-sm py-0.5">
+                          <span className="text-muted-foreground truncate mr-2">
+                            {room_name} <span className="text-xs">({count})</span>
+                          </span>
+                          <span className="font-medium tabular-nums whitespace-nowrap">
+                            ${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Grand Total */}
+              <div className="flex justify-end pt-2 border-t">
                 <div className="text-right">
-                  <div className="text-2xl font-bold">
+                  <div className="text-xl md:text-2xl font-bold">
                     Total: ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </div>
                   <div className="text-sm text-muted-foreground">
                     {items.length} line items
+                    {excludedItemCount > 0 && (
+                      <span className="text-orange-600"> ({excludedItemCount} excluded from scope)</span>
+                    )}
                   </div>
                   {unpricedItemCount > 0 && (
                     <div className="text-sm text-amber-600 font-medium mt-1">
@@ -1813,6 +2294,24 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           )}
         </CardContent>
       </Card>
+
+      {/* Mobile Sticky Total Bar */}
+      {items.length > 0 && (
+        <div className="md:hidden sticky-bottom-bar flex items-center justify-between rounded-lg shadow-lg">
+          <div>
+            <div className="text-xs text-muted-foreground">
+              {items.length} items
+              {excludedItemCount > 0 && <span className="text-orange-600"> · {excludedItemCount} excl.</span>}
+            </div>
+            {unpricedItemCount > 0 && (
+              <div className="text-xs text-amber-600">{unpricedItemCount} unpriced</div>
+            )}
+          </div>
+          <div className="text-lg font-bold text-green-700">
+            ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

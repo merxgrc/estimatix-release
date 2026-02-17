@@ -127,14 +127,14 @@ export async function startJobFromContract(contractId: string) {
     }
 
     // 4. Fetch all estimate_line_items from the approved estimate
-    // Join with rooms to filter out excluded rooms (is_active = false)
+    // Join with rooms to filter out excluded rooms (is_in_scope = false)
     const { data: lineItems, error: lineItemsError } = await supabase
       .from('estimate_line_items')
       .select(`
         *,
         rooms!estimate_line_items_room_id_fkey (
           id,
-          is_active
+          is_in_scope
         )
       `)
       .eq('estimate_id', estimateId)
@@ -157,12 +157,12 @@ export async function startJobFromContract(contractId: string) {
           return false
         }
         // Include items without a room (General items)
-        const room = item.rooms as { id: string; is_active: boolean } | null
+        const room = item.rooms as { id: string; is_in_scope: boolean } | null
         if (!room) {
           return true // No room assigned = included by default
         }
-        // Only include items from active/included rooms
-        return room.is_active === true
+        // Only include items from in-scope rooms
+        return room.is_in_scope !== false
       })
       .map(item => ({
         project_id: contract.project_id,
@@ -283,14 +283,14 @@ export async function startJobFromEstimate(projectId: string) {
     }
 
     // 4. Fetch all estimate_line_items from the estimate
-    // Join with rooms to filter out excluded rooms (is_active = false)
+    // Join with rooms to filter out excluded rooms (is_in_scope = false)
     const { data: lineItems, error: lineItemsError } = await supabase
       .from('estimate_line_items')
       .select(`
         *,
         rooms!estimate_line_items_room_id_fkey (
           id,
-          is_active
+          is_in_scope
         )
       `)
       .eq('estimate_id', estimate.id)
@@ -313,12 +313,12 @@ export async function startJobFromEstimate(projectId: string) {
           return false
         }
         // Include items without a room (General items)
-        const room = item.rooms as { id: string; is_active: boolean } | null
+        const room = item.rooms as { id: string; is_in_scope: boolean } | null
         if (!room) {
           return true // No room assigned = included by default
         }
-        // Only include items from active/included rooms
-        return room.is_active === true
+        // Only include items from in-scope rooms
+        return room.is_in_scope !== false
       })
       .map(item => ({
         project_id: projectId,
