@@ -1,4 +1,4 @@
-G/**
+/**
  * Zod Schemas for Plan Parsing Pipeline
  * 
  * Phase 1: Blueprint/Plan Parsing
