@@ -286,9 +286,7 @@ export async function regenerateProposalTotal(
 
     if (!proposal.estimate_id) {
       throw new Error('Proposal has no linked estimate')
-    }
-
-    // Fetch line items with room exclusion filter
+    }    // Fetch line items with room exclusion filter
     const { data: lineItems, error: lineItemsError } = await supabase
       .from('estimate_line_items')
       .select(`

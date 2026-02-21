@@ -10,7 +10,7 @@ export interface LineItem {
   description: string
   category: string
   cost_code: string | null // Allow null - don't force 999
-  quantity: number
+  quantity: number | null
   unit: string
   labor_cost: number | null  // null = unpriced
   material_cost?: number | null  // null = unpriced

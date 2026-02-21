@@ -38,6 +38,7 @@ import {
   X,
   Loader2,
   ScanLine,
+  Pencil,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Upload as UploadType } from '@/types/db'
@@ -117,6 +118,10 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
   const [showReviewDrawer, setShowReviewDrawer] = useState(false)
   const [activeParseEstimateId, setActiveParseEstimateId] = useState<string | undefined>(undefined)
   
+  // Rename state
+  const [renamingFileId, setRenamingFileId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+
   // Keep activeParseEstimateId in sync with prop
   const effectiveEstimateId = activeParseEstimateId || estimateId
 
@@ -349,12 +354,12 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
 
   const handleUseInCopilot = (file: UploadType) => {
     if (onUseInCopilot) {
-      onUseInCopilot(file.file_url, file.original_filename || 'File')
+      onUseInCopilot(file.file_url, getDisplayName(file))
     } else {
       // Fallback: dispatch event to open copilot
       window.dispatchEvent(new CustomEvent('open-copilot', {
         detail: { 
-          message: `Analyze this file: ${file.original_filename || 'File'}`,
+          message: `Analyze this file: ${getDisplayName(file)}`,
           fileUrl: file.file_url
         }
       }))
@@ -392,6 +397,58 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
       console.error('Update tag error:', error)
       toast.error('Failed to update tag')
     }
+  }
+
+  // Helper: user-visible file name (display_name wins, then original_filename, then URL tail)
+  const getDisplayName = (file: UploadType) =>
+    file.display_name || file.original_filename || file.file_url.split('/').pop() || 'Untitled'
+
+  // Rename file — writes to display_name so original_filename is preserved
+  const handleStartRename = (file: UploadType) => {
+    setRenamingFileId(file.id)
+    setRenameValue(getDisplayName(file))
+  }
+
+  const handleConfirmRename = async () => {
+    if (!renamingFileId || !renameValue.trim()) {
+      toast.error('File name cannot be empty')
+      return
+    }
+
+    try {
+      // Try display_name first (migration 035)
+      const { error } = await supabase
+        .from('uploads')
+        .update({ display_name: renameValue.trim() })
+        .eq('id', renamingFileId)
+
+      if (error) {
+        // Fallback: if display_name column doesn't exist yet, write to original_filename
+        if (error.message.includes('schema cache') || error.message.includes('column')) {
+          console.warn('[Rename] display_name column not found, falling back to original_filename')
+          const { error: fallbackError } = await supabase
+            .from('uploads')
+            .update({ original_filename: renameValue.trim() })
+            .eq('id', renamingFileId)
+          if (fallbackError) throw fallbackError
+        } else {
+          throw error
+        }
+      }
+
+      toast.success('File renamed successfully')
+      setRenamingFileId(null)
+      setRenameValue('')
+      loadFiles()
+    } catch (error) {
+      console.error('Rename error:', error)
+      toast.error('Failed to rename file')
+    }
+  }
+
+  const handleCancelRename = () => {
+    setRenamingFileId(null)
+    setRenameValue('')
   }
 
   // Toggle file selection for parsing
@@ -799,12 +856,34 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
                         </TableCell>
                       )}
                       <TableCell>
-                        <button
-                          onClick={() => window.open(file.file_url, '_blank')}
-                          className="text-left hover:underline text-sm font-medium"
-                        >
-                          {file.original_filename || file.file_url.split('/').pop() || 'Untitled'}
-                        </button>
+                        {renamingFileId === file.id ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="text"
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleConfirmRename()
+                                if (e.key === 'Escape') handleCancelRename()
+                              }}
+                              autoFocus
+                              className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            />
+                            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={handleConfirmRename}>
+                              <Download className="h-3 w-3" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={handleCancelRename}>
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => window.open(file.file_url, '_blank')}
+                            className="text-left hover:underline text-sm font-medium"
+                          >
+                            {getDisplayName(file)}
+                          </button>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
@@ -833,11 +912,17 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
                             <DropdownMenuItem
                               onClick={() => handleDownload(
                                 file.file_url,
-                                file.original_filename || 'file'
+                                getDisplayName(file)
                               )}
                             >
                               <Download className="h-4 w-4 mr-2" />
                               Download
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => handleStartRename(file)}
+                            >
+                              <Pencil className="h-4 w-4 mr-2" />
+                              Rename
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={() => handleUseInCopilot(file)}
@@ -907,12 +992,34 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
                       {getFileTypeIcon(file.file_type as FileType)}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <button
-                        onClick={() => window.open(file.file_url, '_blank')}
-                        className="text-left hover:underline text-sm font-medium truncate block w-full"
-                      >
-                        {file.original_filename || file.file_url.split('/').pop() || 'Untitled'}
-                      </button>
+                      {renamingFileId === file.id ? (
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleConfirmRename()
+                              if (e.key === 'Escape') handleCancelRename()
+                            }}
+                            autoFocus
+                            className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          />
+                          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={handleConfirmRename}>
+                            <Download className="h-3 w-3" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={handleCancelRename}>
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => window.open(file.file_url, '_blank')}
+                          className="text-left hover:underline text-sm font-medium truncate block w-full"
+                        >
+                          {getDisplayName(file)}
+                        </button>
+                      )}
                       <div className="flex items-center gap-2 mt-1">
                         <span className="text-xs text-muted-foreground capitalize">
                           {file.file_type || 'other'}
@@ -943,11 +1050,17 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
                           <DropdownMenuItem
                             onClick={() => handleDownload(
                               file.file_url,
-                              file.original_filename || 'file'
+                              getDisplayName(file)
                             )}
                           >
                             <Download className="h-4 w-4 mr-2" />
                             Download
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => handleStartRename(file)}
+                          >
+                            <Pencil className="h-4 w-4 mr-2" />
+                            Rename
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => handleUseInCopilot(file)}

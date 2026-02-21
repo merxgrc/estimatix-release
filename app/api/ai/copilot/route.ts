@@ -1263,7 +1263,7 @@ async function executeActions(
             room_id: roomId, // Use resolved room_id
             quantity: areaBasedCheck ? null : (data.quantity || 1),
             unit: areaBasedCheck ? 'SQFT' : (data.unit || null),
-            calc_source: areaBasedCheck ? 'room_dimensions' : 'manual',
+            // calc_source excluded — column does not exist in DB yet
             // Phase 1: ALL pricing fields are NULL - manual entry only
             labor_cost: null,
             material_cost: null,

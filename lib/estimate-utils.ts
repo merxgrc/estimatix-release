@@ -9,7 +9,7 @@
 export interface EstimateItem {
   cost_code: string | null
   description: string
-  quantity: number
+  quantity: number | null
   unit_cost?: number | null
   unit?: string | null
   category?: string | null
