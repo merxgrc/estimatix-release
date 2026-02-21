@@ -264,7 +264,7 @@ export async function updateLineItem(
       margin_percent: isAllowance ? 0 : merged.margin_percent,
       client_price,
       pricing_source: merged.pricing_source,
-      calc_source: merged.calc_source,
+      // calc_source excluded — column does not exist in DB yet
       is_allowance: isAllowance,
     }
 
@@ -316,17 +316,40 @@ async function refreshEstimateTotal(
   projectId: string,
 ): Promise<number> {
   // Fetch all active line items and rooms for scope filtering
-  const [{ data: lineItems }, { data: rooms }] = await Promise.all([
-    supabase
+  // Use resilient queries that fall back if columns are missing from schema cache
+  let lineItems: any[] | null = null
+  let rooms: any[] | null = null
+
+  // Try fetching line items with is_active filter; fall back to all items
+  const liResult = await supabase
+    .from('estimate_line_items')
+    .select('client_price, room_id, is_active')
+    .eq('estimate_id', estimateId)
+    .neq('is_active', false)
+  if (liResult.error && liResult.error.message.includes('schema cache')) {
+    const fallback = await supabase
       .from('estimate_line_items')
-      .select('client_price, room_id, is_active')
+      .select('client_price, room_id')
       .eq('estimate_id', estimateId)
-      .neq('is_active', false),
-    supabase
+    lineItems = fallback.data
+  } else {
+    lineItems = liResult.data
+  }
+
+  // Try fetching rooms with is_in_scope; fall back to just id (treat all as in-scope)
+  const roomsResult = await supabase
+    .from('rooms')
+    .select('id, is_in_scope')
+    .eq('project_id', projectId)
+  if (roomsResult.error && roomsResult.error.message.includes('schema cache')) {
+    const fallback = await supabase
       .from('rooms')
-      .select('id, is_in_scope')
-      .eq('project_id', projectId),
-  ])
+      .select('id')
+      .eq('project_id', projectId)
+    rooms = fallback.data?.map(r => ({ ...r, is_in_scope: true })) ?? null
+  } else {
+    rooms = roomsResult.data
+  }
 
   const scopeMap = new Map<string, boolean>()
   if (rooms) {

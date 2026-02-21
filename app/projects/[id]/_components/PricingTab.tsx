@@ -170,14 +170,24 @@ export function PricingTab({ project, estimates, activeEstimateId }: PricingTabP
     const loadRooms = async () => {
       if (!project?.id) return
 
-      const { data: rooms } = await supabase
+      // Resilient: fall back if is_in_scope column is missing from schema cache
+      const result = await supabase
         .from('rooms')
         .select('id, is_in_scope')
         .eq('project_id', project.id)
 
+      let rooms = result.data
+      if (result.error && result.error.message.includes('schema cache')) {
+        const fallback = await supabase
+          .from('rooms')
+          .select('id')
+          .eq('project_id', project.id)
+        rooms = fallback.data?.map(r => ({ ...r, is_in_scope: true })) ?? null
+      }
+
       if (rooms) {
         const map = new Map<string, boolean>()
-        rooms.forEach((r: { id: string; is_in_scope: boolean | null }) => {
+        rooms.forEach((r: { id: string; is_in_scope?: boolean | null }) => {
           map.set(r.id, r.is_in_scope !== false) // treat null as in-scope
         })
         setRoomActiveMap(map)

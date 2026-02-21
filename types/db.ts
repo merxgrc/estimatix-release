@@ -434,6 +434,7 @@ export interface Database {
           file_url: string
           kind: 'photo' | 'blueprint' | 'audio'
           original_filename: string | null
+          display_name: string | null
           file_type: 'pdf' | 'image' | 'audio' | 'video' | 'other' | null
           tag: 'blueprint' | 'spec' | 'photo' | 'other' | null
           created_at: string
@@ -444,6 +445,7 @@ export interface Database {
           file_url: string
           kind: 'photo' | 'blueprint' | 'audio'
           original_filename?: string | null
+          display_name?: string | null
           file_type?: 'pdf' | 'image' | 'audio' | 'video' | 'other' | null
           tag?: 'blueprint' | 'spec' | 'photo' | 'other' | null
           created_at?: string
@@ -454,6 +456,7 @@ export interface Database {
           file_url?: string
           kind?: 'photo' | 'blueprint' | 'audio'
           original_filename?: string | null
+          display_name?: string | null
           file_type?: 'pdf' | 'image' | 'audio' | 'video' | 'other' | null
           tag?: 'blueprint' | 'spec' | 'photo' | 'other' | null
           created_at?: string

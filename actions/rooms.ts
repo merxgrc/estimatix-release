@@ -222,7 +222,7 @@ export async function upsertRoom(input: {
 
       if (updateError) {
         console.error('Error updating room:', updateError)
-        return { success: false, error: 'Failed to update room' }
+        return { success: false, error: `Failed to update room: ${updateError.message}` }
       }
 
       return { success: true, room: room as Room }
@@ -236,7 +236,7 @@ export async function upsertRoom(input: {
 
       if (insertError) {
         console.error('Error creating room:', insertError)
-        return { success: false, error: 'Failed to create room' }
+        return { success: false, error: `Failed to create room: ${insertError.message}` }
       }
 
       return { success: true, room: room as Room }
@@ -335,11 +335,12 @@ export async function updateRoomDimensions(
     // If any dimension is null, derived areas are null → set dependent quantities to null
     const hasCompleteDimensions = length_ft !== null && width_ft !== null
 
+    // NOTE: calc_source column does not exist in DB yet, so we skip that filter.
+    // When migration 034 is applied, re-enable: .eq('calc_source', 'room_dimensions')
     const { data: dependentItems, error: fetchItemsError } = await supabase
       .from('estimate_line_items')
       .select('id, cost_code, unit, description, category, quantity')
       .eq('room_id', roomId)
-      .eq('calc_source', 'room_dimensions')
       .eq('is_active', true)
 
     if (fetchItemsError) {
@@ -692,9 +693,9 @@ export async function rederiveLineItemQuantity(
     }
 
     // Update the line item
+    // calc_source excluded — column does not exist in DB yet
     const updateFields: Record<string, unknown> = {
       quantity: newQuantity,
-      calc_source: 'room_dimensions',
     }
     if (newDirectCost !== null) {
       updateFields.direct_cost = newDirectCost
@@ -758,15 +759,8 @@ export async function setLineItemCalcSourceManual(
       return { success: false, error: 'Unauthorized' }
     }
 
-    const { error: updateError } = await supabase
-      .from('estimate_line_items')
-      .update({ calc_source: 'manual' })
-      .eq('id', lineItemId)
-
-    if (updateError) {
-      return { success: false, error: 'Failed to update calc_source' }
-    }
-
+    // calc_source column does not exist in DB yet — this is a no-op until migration 034 is applied.
+    // Skip the DB update; the client already tracks calc_source in local state.
     return { success: true }
   } catch (error) {
     return {

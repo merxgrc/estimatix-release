@@ -57,6 +57,145 @@ interface EstimateTableProps {
   }
 }
 
+// ─── Stable sub-components (defined OUTSIDE EstimateTable to avoid re-mount on every render) ───
+
+// Auto-expanding textarea for description
+const DescriptionTextarea = ({
+  value,
+  onChange,
+  onBlur,
+  placeholder,
+  disabled
+}: {
+  value: string
+  onChange: (value: string) => void
+  onBlur?: () => void
+  placeholder?: string
+  disabled?: boolean
+}) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Buffer keystrokes locally — only push to parent on blur.
+  // This prevents parent re-renders (setItems) on every keystroke,
+  // which was causing the textarea to lose focus.
+  const [localValue, setLocalValue] = useState(value)
+  const isFocusedRef = useRef(false)
+
+  // Sync from parent when not focused (e.g. after save reconciliation)
+  useEffect(() => {
+    if (!isFocusedRef.current && value !== localValue) {
+      setLocalValue(value)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+
+  // Auto-expand height
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`
+    }
+  }, [localValue])
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setLocalValue(e.target.value)
+  }
+
+  const handleFocus = () => {
+    isFocusedRef.current = true
+  }
+
+  const handleBlur = () => {
+    isFocusedRef.current = false
+    // Push final value to parent only on blur
+    if (localValue !== value) {
+      onChange(localValue)
+    }
+    onBlur?.()
+  }
+
+  return (
+    <Textarea
+      ref={textareaRef}
+      value={localValue}
+      onChange={handleChange}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      placeholder={placeholder}
+      className="min-h-[80px] text-sm resize-none"
+      disabled={disabled}
+    />
+  )
+}
+
+// Auto-expanding textarea component (for notes etc.)
+const AutoExpandingTextarea = ({
+  value,
+  onChange,
+  onBlur,
+  placeholder
+}: {
+  value: string
+  onChange: (value: string) => void
+  onBlur?: () => void
+  placeholder?: string
+}) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Use internal state to prevent re-render issues on every keystroke
+  const [internalValue, setInternalValue] = useState(value)
+  const isFocusedRef = useRef(false)
+
+  // Sync internal value when prop value changes (but only if textarea is not focused)
+  useEffect(() => {
+    if (!isFocusedRef.current && value !== internalValue) {
+      setInternalValue(value)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newValue = e.target.value
+    setInternalValue(newValue)
+    // Auto-expand height
+    const textarea = e.currentTarget
+    textarea.style.height = 'auto'
+    textarea.style.height = textarea.scrollHeight + 'px'
+  }
+
+  const handleFocus = () => {
+    isFocusedRef.current = true
+  }
+
+  const handleBlur = () => {
+    isFocusedRef.current = false
+    // Only update parent state on blur
+    if (internalValue !== value) {
+      onChange(internalValue)
+    }
+    onBlur?.()
+  }
+
+  // Auto-expand on mount and when value changes externally
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px'
+    }
+  }, [internalValue])
+
+  return (
+    <textarea
+      ref={textareaRef}
+      value={internalValue}
+      onChange={handleChange}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      placeholder={placeholder}
+      className="w-full px-3 py-2 border rounded resize-none overflow-hidden min-h-[120px]"
+      rows={3}
+    />
+  )
+}
+
 export function EstimateTable({ projectId, estimateId, initialData, onSave, projectMetadata }: EstimateTableProps) {
   const [items, setItems] = useState<LineItem[]>([])
   const [missingInfo, setMissingInfo] = useState<string[]>(initialData?.missing_info || [])
@@ -185,10 +324,21 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     if (estimateId && projectId) {
       try {
         // Also fetch room scope data for this project
-        const { data: roomsData } = await supabase
+        // Resilient: fall back if is_in_scope column is missing from schema cache
+        let roomsData: any[] | null = null
+        const roomsResult = await supabase
           .from('rooms')
           .select('id, is_in_scope')
           .eq('project_id', projectId)
+        if (roomsResult.error && roomsResult.error.message.includes('schema cache')) {
+          const fallback = await supabase
+            .from('rooms')
+            .select('id')
+            .eq('project_id', projectId)
+          roomsData = fallback.data?.map(r => ({ ...r, is_in_scope: true })) ?? null
+        } else {
+          roomsData = roomsResult.data
+        }
 
         if (roomsData) {
           const scopeMap = new Map<string, boolean>()
@@ -200,7 +350,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
 
         const { data, error } = await supabase
           .from('estimate_line_items')
-          .select('*, price_source')
+          .select('*')
           .eq('estimate_id', estimateId)
           .order('created_at', { ascending: true })
 
@@ -405,7 +555,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           margin_percent: item.margin_percent || 30,
           client_price: item.client_price ?? null,
           pricing_source: (item.pricing_source as UpdateLineItemPatch['pricing_source']) || null,
-          calc_source: item.calc_source || 'manual',
+          // calc_source excluded — column does not exist in DB yet
           is_allowance: item.is_allowance ?? null,
         }
 
@@ -772,121 +922,6 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
     return description.substring(0, 50).trim() + (description.length > 50 ? '...' : '')
   }
 
-  // Auto-expanding textarea for description
-  const DescriptionTextarea = ({
-    value,
-    onChange,
-    onBlur,
-    placeholder,
-    disabled
-  }: {
-    value: string
-    onChange: (value: string) => void
-    onBlur?: () => void
-    placeholder?: string
-    disabled?: boolean
-  }) => {
-    const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-    useEffect(() => {
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto'
-        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`
-      }
-    }, [value])
-
-    const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const newValue = e.target.value
-      onChange(newValue)
-      // Auto-expand
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto'
-        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`
-      }
-    }
-
-    return (
-      <Textarea
-        ref={textareaRef}
-        value={value}
-        onChange={handleChange}
-        onBlur={onBlur}
-        placeholder={placeholder}
-        className="min-h-[80px] text-sm resize-none"
-        disabled={disabled}
-      />
-    )
-  }
-
-  // Auto-expanding textarea component
-  const AutoExpandingTextarea = ({ 
-    value, 
-    onChange, 
-    onBlur,
-    placeholder 
-  }: { 
-    value: string
-    onChange: (value: string) => void
-    onBlur?: () => void
-    placeholder?: string 
-  }) => {
-    const textareaRef = useRef<HTMLTextAreaElement>(null)
-    // Use internal state to prevent re-render issues on every keystroke
-    const [internalValue, setInternalValue] = useState(value)
-    const isFocusedRef = useRef(false)
-
-    // Sync internal value when prop value changes (but only if textarea is not focused)
-    useEffect(() => {
-      if (!isFocusedRef.current && value !== internalValue) {
-        setInternalValue(value)
-      }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [value])
-
-    const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const newValue = e.target.value
-      setInternalValue(newValue)
-      // Auto-expand height
-      const textarea = e.currentTarget
-      textarea.style.height = 'auto'
-      textarea.style.height = textarea.scrollHeight + 'px'
-    }
-
-    const handleFocus = () => {
-      isFocusedRef.current = true
-    }
-
-    const handleBlur = () => {
-      isFocusedRef.current = false
-      // Only update parent state on blur
-      if (internalValue !== value) {
-        onChange(internalValue)
-      }
-      onBlur?.()
-    }
-
-    // Auto-expand on mount and when value changes externally
-    useEffect(() => {
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto'
-        textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px'
-      }
-    }, [internalValue])
-
-    return (
-      <textarea
-        ref={textareaRef}
-        value={internalValue}
-        onChange={handleChange}
-        onFocus={handleFocus}
-        onBlur={handleBlur}
-        placeholder={placeholder}
-        className="w-full px-3 py-2 border rounded resize-none overflow-hidden min-h-[120px]"
-        rows={3}
-      />
-    )
-  }
-
   // Smart save handler that merges duplicate items before saving
   const handleSmartSave = async () => {
     const hasItems = items.length > 0
@@ -1116,7 +1151,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           description: item.description || null,
           category: categoryInfo.label,
           cost_code: item.cost_code || null, // Don't force 999 - preserve null if not set
-          quantity: item.quantity || 1,
+          quantity: item.quantity ?? null,
           unit: item.unit || 'EA',
           // Preserve null for unpriced items (null ≠ 0)
           labor_cost: item.labor_cost ?? null,
@@ -1126,7 +1161,8 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
           margin_percent: item.margin_percent || 30,
           client_price: item.client_price ?? null,
           pricing_source: item.pricing_source || null,
-          calc_source: item.calc_source || 'manual',
+          // NOTE: calc_source is intentionally excluded — column does not exist in DB yet.
+          // It is tracked client-side only until migration 034 is applied.
         }
         
         // Only include id if it exists and is a valid UUID (not temp-*)
@@ -1149,16 +1185,16 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
         // Continue anyway - upsert will handle duplicates
       }
 
-      // Validate that all items have required fields before saving
-      // Only require: description, quantity, unit (cost_code is optional but recommended)
+      // Validate that all items have a description (required).
+      // Quantity and unit are optional — quantity defaults to null, unit to 'EA'.
       const invalidItems = lineItemsToSave.filter(item => {
-        return !item.description || !item.description.trim() || !item.quantity || !item.unit
+        return !item.description || !item.description.trim()
       })
       
       if (invalidItems.length > 0) {
         throw new Error(
-          `Please fill in description, quantity, and unit for all items before saving. ` +
-          `${invalidItems.length} item(s) are missing required information.`
+          `Please fill in a description for all items before saving. ` +
+          `${invalidItems.length} item(s) are missing a description.`
         )
       }
 
@@ -1213,6 +1249,7 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       }
 
       setSaveSuccess(true)
+      toast.success('Estimate saved successfully')
       if (currentEstimateId) {
         onSave?.(currentEstimateId, totalToSave)
       }
@@ -1224,7 +1261,9 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
 
     } catch (err) {
       console.error('Save estimate error:', err)
-      setError(err instanceof Error ? err.message : 'Failed to save estimate')
+      const errorMsg = err instanceof Error ? err.message : 'Failed to save estimate'
+      setError(errorMsg)
+      toast.error(errorMsg)
     } finally {
       setIsSaving(false)
     }
@@ -1250,15 +1289,14 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
       return
     }
 
-    // Check if items have required fields (description, quantity, unit)
-    // cost_code is optional but recommended
+    // Check if items have a description (required for spec sheet).
     const incompleteItems = items.filter(item => 
-      !item.description || !item.description.trim() || !item.quantity || !item.unit
+      !item.description || !item.description.trim()
     )
     if (incompleteItems.length > 0) {
       setBlockedActionMessage(
-        `Please complete all items before generating the spec sheet. ` +
-        `${incompleteItems.length} item(s) are missing description, quantity, or unit.`
+        `Please add a description to all items before generating the spec sheet. ` +
+        `${incompleteItems.length} item(s) are missing a description.`
       )
       setTimeout(() => setBlockedActionMessage(null), 5000)
       return
@@ -1287,9 +1325,12 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
 
       const data = await response.json()
       setSpecSheetUrl(data.url)
+      toast.success('Spec sheet generated! Click "Download PDF" above to view it.', { duration: 6000 })
     } catch (err) {
       console.error('Generate spec sheet error:', err)
-      setError(err instanceof Error ? err.message : 'Failed to generate spec sheet')
+      const errorMsg = err instanceof Error ? err.message : 'Failed to generate spec sheet'
+      setError(errorMsg)
+      toast.error(errorMsg, { duration: 8000 })
     } finally {
       setIsGeneratingSpecSheet(false)
     }
@@ -1511,8 +1552,12 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                         <div className="flex items-center gap-1">
                           <Input
                             type="number"
-                            value={item.quantity || 1}
-                            onChange={(e) => updateItem(index, { quantity: Number(e.target.value) || 1 })}
+                            value={item.quantity ?? ''}
+                            onChange={(e) => {
+                              const raw = e.target.value
+                              const qty = raw === '' ? null : parseFloat(raw)
+                              updateItem(index, { quantity: qty === null || isNaN(qty) ? null : qty })
+                            }}
                             onBlur={() => {
                               const currentItem = itemsRef.current[index]
                               if (currentItem?.id) saveLineItem(currentItem.id, currentItem)
@@ -1830,10 +1875,11 @@ export function EstimateTable({ projectId, estimateId, initialData, onSave, proj
                             <div className="flex items-center gap-1 min-w-[110px]">
                               <Input
                                 type="number"
-                                value={item.quantity || 1}
+                                value={item.quantity ?? ''}
                                 onChange={(e) => {
-                                  const qty = Number(e.target.value) || 1
-                                  updateItem(index, { quantity: qty })
+                                  const raw = e.target.value
+                                  const qty = raw === '' ? null : parseFloat(raw)
+                                  updateItem(index, { quantity: qty === null || isNaN(qty) ? null : qty })
                                 }}
                                 onBlur={() => {
                                   const currentItem = itemsRef.current[index]

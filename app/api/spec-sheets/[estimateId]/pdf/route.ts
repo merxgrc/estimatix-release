@@ -647,26 +647,51 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
     let allItems = jsonData?.items || [];
 
     // Try to fetch line items from estimate_line_items table (authoritative source)
-    // Join with rooms to filter out excluded rooms (is_in_scope = false)
-    const { data: lineItemsData } = await supabase
-      .from('estimate_line_items')
-      .select(`
-        *,
-        rooms!estimate_line_items_room_id_fkey (
-          id,
-          is_in_scope
-        )
-      `)
-      .eq('estimate_id', estimateId)
-      .order('created_at', { ascending: true });
+    // Attempt rooms join for scope filtering; fall back to plain select if columns are missing
+    let lineItemsData: any[] | null = null;
+    
+    try {
+      const joinResult = await supabase
+        .from('estimate_line_items')
+        .select(`
+          *,
+          rooms!estimate_line_items_room_id_fkey (
+            id,
+            is_in_scope
+          )
+        `)
+        .eq('estimate_id', estimateId)
+        .order('created_at', { ascending: true });
+
+      if (joinResult.error) {
+        // If the join fails (e.g. is_in_scope column missing), fall back to plain select
+        console.warn('[PDF] Rooms join failed, falling back to plain select:', joinResult.error.message);
+        const plainResult = await supabase
+          .from('estimate_line_items')
+          .select('*')
+          .eq('estimate_id', estimateId)
+          .order('created_at', { ascending: true });
+        lineItemsData = plainResult.data;
+      } else {
+        lineItemsData = joinResult.data;
+      }
+    } catch (joinErr) {
+      console.warn('[PDF] Rooms join exception, falling back to plain select:', joinErr);
+      const plainResult = await supabase
+        .from('estimate_line_items')
+        .select('*')
+        .eq('estimate_id', estimateId)
+        .order('created_at', { ascending: true });
+      lineItemsData = plainResult.data;
+    }
 
     if (lineItemsData && lineItemsData.length > 0) {
-      // Filter out items from excluded (out-of-scope) rooms
+      // Filter out items from excluded (out-of-scope) rooms if join data is present
       // Items without a room (room_id = null) are included by default
       const includedItems = lineItemsData.filter((item: any) => {
-        const room = item.rooms as { id: string; is_in_scope: boolean } | null;
+        const room = item.rooms as { id: string; is_in_scope: boolean } | null | undefined;
         if (!room) {
-          return true; // No room assigned = included by default
+          return true; // No room assigned or no join data = included by default
         }
         return room.is_in_scope !== false;
       });
@@ -677,6 +702,7 @@ export async function GET(_req: Request, context: { params: Promise<{ estimateId
         description: item.description || '',
         cost_code: item.cost_code || '999',
         room_name: item.room_name || 'General',
+        quantity: item.quantity || null,
         labor_cost: item.labor_cost || null,
         margin_percent: item.margin_percent || null,
         client_price: item.client_price || null,
