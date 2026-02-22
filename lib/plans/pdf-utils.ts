@@ -82,32 +82,40 @@ function getPDFParseClass(): any {
 export async function extractPdfPagesWithText(
   buffer: Buffer
 ): Promise<PdfExtractionResult> {
+  const startMs = Date.now()
   const result: PdfExtractionResult = {
     pages: [],
     totalPages: 0,
     hasEmbeddedText: false,
   }
 
+  // Diagnostic header
+  console.log(`[PDF Utils] extractPdfPagesWithText: buffer ${buffer.length} bytes, first5=${buffer.toString('ascii', 0, 5)}`)
+
   // ---------------------------------------------------------------
   // PRIMARY: pdf-parse v2 (self-contained, no native deps needed)
   // ---------------------------------------------------------------
   try {
     const PDFParse = getPDFParseClass()
+    console.log('[PDF Utils] PDFParse class loaded OK')
     const parser = new PDFParse({ data: buffer })
+    console.log('[PDF Utils] PDFParse instance created')
 
     // Get page count
     let pageCount = 1
     try {
       const info = await parser.getInfo()
       pageCount = info?.total || 1
-      console.log(`[PDF Utils] pdf-parse getInfo: ${pageCount} pages`)
+      console.log(`[PDF Utils] pdf-parse getInfo: ${pageCount} pages (${Date.now() - startMs}ms)`)
     } catch (infoErr) {
       console.warn('[PDF Utils] pdf-parse getInfo failed:', infoErr instanceof Error ? infoErr.message : infoErr)
+      if (infoErr instanceof Error) console.warn('[PDF Utils] getInfo stack:', infoErr.stack?.split('\n').slice(0, 3).join('\n'))
     }
 
     // Get text
     const textResult = await parser.getText()
     await parser.destroy().catch(() => {})
+    console.log(`[PDF Utils] pdf-parse getText completed (${Date.now() - startMs}ms), keys: ${Object.keys(textResult || {}).join(',')}`)
 
     result.totalPages = pageCount
 
@@ -136,6 +144,7 @@ export async function extractPdfPagesWithText(
     } else {
       // Fallback: try splitting the full text by form feeds
       const fullText: string = textResult?.text || ''
+      console.log(`[PDF Utils] getText returned no page array; full text length: ${fullText.length}`)
       if (fullText.trim().length > 0) {
         result.hasEmbeddedText = true
         const pageTexts = fullText.split(/\f|\n{4,}/).filter((p: string) => p.trim().length > 0)
@@ -153,10 +162,13 @@ export async function extractPdfPagesWithText(
       }
     }
 
-    console.log(`[PDF Utils] pdf-parse extracted ${result.pages.length} pages, ${result.pages.filter(p => p.hasText).length} with text`)
+    console.log(`[PDF Utils] pdf-parse extracted ${result.pages.length} pages, ${result.pages.filter(p => p.hasText).length} with text (${Date.now() - startMs}ms)`)
     return result
   } catch (primaryError) {
-    console.error('[PDF Utils] pdf-parse v2 PRIMARY extraction failed:', primaryError instanceof Error ? primaryError.message : primaryError)
+    console.error('[PDF Utils] pdf-parse v2 PRIMARY extraction FAILED:', primaryError instanceof Error ? primaryError.message : primaryError)
+    if (primaryError instanceof Error) {
+      console.error('[PDF Utils] PRIMARY stack:', primaryError.stack)
+    }
   }
 
   // ---------------------------------------------------------------
@@ -198,12 +210,15 @@ export async function extractPdfPagesWithText(
     console.log(`[PDF Utils] pdfjs-dist extracted ${result.pages.length} pages, ${result.pages.filter(p => p.hasText).length} with text`)
     return result
   } catch (fallbackError) {
-    console.error('[PDF Utils] pdfjs-dist FALLBACK also failed:', fallbackError instanceof Error ? fallbackError.message : fallbackError)
+    console.error('[PDF Utils] pdfjs-dist FALLBACK also FAILED:', fallbackError instanceof Error ? fallbackError.message : fallbackError)
+    if (fallbackError instanceof Error) {
+      console.error('[PDF Utils] FALLBACK stack:', fallbackError.stack)
+    }
     return {
       pages: [],
       totalPages: 0,
       hasEmbeddedText: false,
-      error: 'Failed to extract text from PDF. The file may be image-only or corrupted.',
+      error: `Failed to extract text from PDF (both parsers failed). The file may be image-only or corrupted. Primary: pdf-parse error. Fallback: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
     }
   }
 }
@@ -384,19 +399,29 @@ export async function getPdfPageCount(buffer: Buffer): Promise<number> {
 // =============================================================================
 
 /**
+ * Maximum base64 size per image (bytes). Images above this are re-rendered at
+ * lower scale to stay within OpenAI vision API payload limits (~20 MB total).
+ */
+const MAX_IMAGE_BASE64_BYTES = 4 * 1024 * 1024 // 4 MB per image
+
+/**
  * Render specific PDF pages to base64 images for vision AI analysis.
  * 
  * PRIMARY: pdf-parse v2 getScreenshot (pure JS, no native deps needed)
  * FALLBACK: pdfjs-dist + node-canvas (requires native canvas)
+ *
+ * Images that exceed MAX_IMAGE_BASE64_BYTES are automatically re-rendered
+ * at a lower scale (0.75) to keep payloads manageable.
  */
 export async function renderPdfPagesToImages(
   buffer: Buffer,
   pageNumbers: number[],
-  scale: number = 1.5
+  scale: number = 1.0
 ): Promise<RenderedPage[]> {
   if (pageNumbers.length === 0) return []
 
-  console.log(`[PDF Utils] Rendering ${pageNumbers.length} pages: [${pageNumbers.join(', ')}] at scale ${scale}`)
+  const startMs = Date.now()
+  console.log(`[PDF Utils] renderPdfPagesToImages: ${pageNumbers.length} pages [${pageNumbers.join(', ')}] at scale ${scale}, buffer ${buffer.length} bytes`)
 
   // ---------------------------------------------------------------
   // PRIMARY: pdf-parse v2 getScreenshot (no native dependencies)
@@ -405,6 +430,7 @@ export async function renderPdfPagesToImages(
     const PDFParse = getPDFParseClass()
     const parser = new PDFParse({ data: buffer })
 
+    console.log(`[PDF Utils] Calling getScreenshot (scale=${scale})...`)
     const ssResult = await parser.getScreenshot({
       partial: pageNumbers,
       scale,
@@ -420,28 +446,60 @@ export async function renderPdfPagesToImages(
       for (let i = 0; i < ssResult.pages.length; i++) {
         const page = ssResult.pages[i]
         const dataUrl: string = page.dataUrl || page.data_url || ''
-        const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : ''
+        let base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : ''
 
         if (base64 && base64.length > 100) {
+          const sizeKB = Math.round(base64.length / 1024)
+          const pageNum = page.pageNumber || pageNumbers[i] || (i + 1)
+
+          // If the image is too large, re-render at lower scale
+          if (base64.length > MAX_IMAGE_BASE64_BYTES && scale > 0.5) {
+            console.warn(`[PDF Utils] Page ${pageNum} image is ${sizeKB}KB (>${Math.round(MAX_IMAGE_BASE64_BYTES / 1024)}KB), re-rendering at scale 0.75`)
+            try {
+              const smallParser = new PDFParse({ data: buffer })
+              const smallSs = await smallParser.getScreenshot({
+                partial: [pageNum],
+                scale: 0.75,
+                imageDataUrl: true,
+                imageBuffer: false,
+              })
+              await smallParser.destroy().catch(() => {})
+              const smallPage = smallSs?.pages?.[0]
+              const smallUrl: string = smallPage?.dataUrl || smallPage?.data_url || ''
+              const smallBase64 = smallUrl.includes(',') ? smallUrl.split(',')[1] : ''
+              if (smallBase64 && smallBase64.length > 100) {
+                base64 = smallBase64
+                console.log(`[PDF Utils] Page ${pageNum} re-rendered: ${Math.round(smallBase64.length / 1024)}KB`)
+              }
+            } catch (resizeErr) {
+              console.warn(`[PDF Utils] Re-render at lower scale failed for page ${pageNum}:`, resizeErr instanceof Error ? resizeErr.message : resizeErr)
+            }
+          }
+
           results.push({
-            pageNumber: page.pageNumber || pageNumbers[i] || (i + 1),
+            pageNumber: pageNum,
             base64,
             width: page.width || 0,
             height: page.height || 0,
           })
-          console.log(`[PDF Utils] Page ${page.pageNumber || pageNumbers[i]} rendered via pdf-parse (${Math.round(base64.length / 1024)}KB)`)
+          console.log(`[PDF Utils] Page ${pageNum} rendered via pdf-parse: ${Math.round(base64.length / 1024)}KB, ${page.width}x${page.height} (${Date.now() - startMs}ms)`)
         }
       }
+    } else {
+      console.warn('[PDF Utils] getScreenshot returned:', ssResult ? Object.keys(ssResult) : 'null')
     }
 
     if (results.length > 0) {
-      console.log(`[PDF Utils] Successfully rendered ${results.length}/${pageNumbers.length} pages via pdf-parse v2`)
+      console.log(`[PDF Utils] Successfully rendered ${results.length}/${pageNumbers.length} pages via pdf-parse v2 (${Date.now() - startMs}ms)`)
       return results
     }
 
     console.warn('[PDF Utils] pdf-parse getScreenshot returned no usable pages')
   } catch (ppError) {
-    console.error('[PDF Utils] pdf-parse getScreenshot failed:', ppError instanceof Error ? ppError.message : ppError)
+    console.error('[PDF Utils] pdf-parse getScreenshot FAILED:', ppError instanceof Error ? ppError.message : ppError)
+    if (ppError instanceof Error) {
+      console.error('[PDF Utils] getScreenshot stack:', ppError.stack)
+    }
   }
 
   // ---------------------------------------------------------------
@@ -456,8 +514,8 @@ export async function renderPdfPagesToImages(
       const canvasModule = require('canvas')
       createCanvas = canvasModule.createCanvas
       console.log('[PDF Utils] Canvas module loaded for pdfjs fallback')
-    } catch {
-      console.warn('[PDF Utils] Canvas not available, skipping pdfjs+canvas fallback')
+    } catch (canvasErr) {
+      console.warn('[PDF Utils] Canvas not available, skipping pdfjs+canvas fallback:', canvasErr instanceof Error ? canvasErr.message : canvasErr)
       return []
     }
 
@@ -499,15 +557,20 @@ export async function renderPdfPagesToImages(
             width: Math.ceil(viewport.width),
             height: Math.ceil(viewport.height),
           })
+          console.log(`[PDF Utils] pdfjs+canvas page ${pageNum}: ${Math.round(base64.length / 1024)}KB`)
         }
       } catch (pageError) {
         console.error(`[PDF Utils] pdfjs+canvas page ${pageNum} error:`, pageError)
       }
     }
 
+    if (results.length > 0) {
+      console.log(`[PDF Utils] pdfjs+canvas rendered ${results.length} pages (${Date.now() - startMs}ms)`)
+    }
     return results
   } catch (error) {
-    console.error('[PDF Utils] pdfjs+canvas fallback error:', error)
+    console.error('[PDF Utils] pdfjs+canvas fallback error:', error instanceof Error ? error.message : error)
+    if (error instanceof Error) console.error('[PDF Utils] pdfjs+canvas stack:', error.stack)
     return results
   }
 }

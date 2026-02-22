@@ -473,6 +473,61 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
     return match ? match[1] : fileUrl
   }
 
+  /**
+   * Client-side fallback: render PDF pages in the browser using PDF.js,
+   * then send the base64 images to /api/plans/vision-fallback for room
+   * extraction. Used when the server-side PDF renderer fails.
+   */
+  const clientSidePdfFallback = async (
+    file: UploadType,
+    _estimateId: string,
+  ): Promise<{ rooms: any[]; assumptions: string[]; warnings: string[]; lineItemScaffold: any[] } | null> => {
+    if (!file.file_url) return null
+    const ext = file.file_url.split('.').pop()?.toLowerCase()
+    if (ext !== 'pdf') return null
+
+    // Dynamic import to avoid bundling pdfjs-dist on initial load
+    const { renderPdfPagesClientSide } = await import('@/lib/plans/client-pdf-renderer')
+
+    // Download the PDF via public URL
+    console.log('[Client Fallback] Downloading PDF from public URL...')
+    const pdfResp = await fetch(file.file_url)
+    if (!pdfResp.ok) throw new Error(`Failed to download PDF: ${pdfResp.status}`)
+    const pdfBlob = await pdfResp.blob()
+    console.log(`[Client Fallback] Downloaded ${Math.round(pdfBlob.size / 1024)}KB`)
+
+    // Render pages 1-3 (or fewer) at scale 1.0
+    const pages = await renderPdfPagesClientSide(pdfBlob, undefined, 1.0)
+    if (pages.length === 0) {
+      console.warn('[Client Fallback] No pages rendered')
+      return null
+    }
+    console.log(`[Client Fallback] Rendered ${pages.length} pages, sending to vision API`)
+
+    // Send to vision-fallback endpoint
+    const visionResp = await fetch('/api/plans/vision-fallback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectId,
+        pages: pages.map(p => ({ pageNumber: p.pageNumber, base64: p.base64 })),
+      }),
+    })
+
+    if (!visionResp.ok) {
+      const err = await visionResp.json().catch(() => ({}))
+      throw new Error(err.error || `Vision fallback failed: ${visionResp.status}`)
+    }
+
+    const visionResult = await visionResp.json()
+    return {
+      rooms: visionResult.rooms || [],
+      assumptions: visionResult.assumptions || [],
+      warnings: visionResult.warnings || [],
+      lineItemScaffold: [],
+    }
+  }
+
   // Parse selected blueprints (or a specific file if passed directly)
   const handleParseBlueprints = async (singleFile?: UploadType) => {
     // If a single file is passed (from dropdown), use it directly
@@ -546,6 +601,42 @@ export function FilesTab({ projectId, estimateId, onUseInCopilot, onBlueprintPar
 
       if (!response.ok) {
         throw new Error(result.error || 'Failed to parse plans')
+      }
+
+      // Check if server rendering failed — offer client-side fallback
+      const warnings: string[] = result.warnings || []
+      const renderFailed = warnings.some((w: string) =>
+        w.includes('Could not render PDF pages') ||
+        w.includes('Vision analysis unavailable') ||
+        w.includes('both parsers failed')
+      )
+      const noRooms = !result.rooms || result.rooms.length === 0
+
+      if (noRooms && renderFailed && filesToParse.length > 0) {
+        console.log('[Parse] Server rendering failed, attempting client-side PDF→images fallback')
+        toast.info('Server rendering failed — trying local PDF rendering...', { duration: 4000 })
+        try {
+          const clientResult = await clientSidePdfFallback(filesToParse[0], activeEstimateId || '')
+          if (clientResult && clientResult.rooms && clientResult.rooms.length > 0) {
+            setParseResult({
+              ...result,
+              ...clientResult,
+              success: true,
+              warnings: [
+                ...(result.warnings || []),
+                'Rooms detected via client-side rendering (local fallback).',
+              ],
+            })
+            setShowReviewDrawer(true)
+            toast.success(`Detected ${clientResult.rooms.length} rooms via local rendering`, {
+              description: 'Review and edit before applying to your estimate.',
+              duration: 4000,
+            })
+            return // done
+          }
+        } catch (fallbackErr) {
+          console.warn('[Parse] Client-side fallback also failed:', fallbackErr)
+        }
       }
 
       // Always show results in review drawer, even on partial failure

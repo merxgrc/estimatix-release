@@ -94,7 +94,8 @@ export async function createProposalFromEstimate(
 
     // 1. Fetch all estimate_line_items for the given estimateId
     // Join with rooms to filter out excluded rooms (is_in_scope = false)
-    const { data: lineItems, error: lineItemsError } = await supabase
+    let lineItems: any[] | null = null
+    const { data: liData, error: lineItemsError } = await supabase
       .from('estimate_line_items')
       .select(`
         *,
@@ -105,8 +106,18 @@ export async function createProposalFromEstimate(
       `)
       .eq('estimate_id', estimateId)
 
-    if (lineItemsError) {
+    if (lineItemsError?.message?.includes('column') || lineItemsError?.message?.includes('schema cache')) {
+      // is_in_scope column missing — fetch without join (treat all rooms as in-scope)
+      const { data: fallbackItems, error: fallbackErr } = await supabase
+        .from('estimate_line_items')
+        .select('*')
+        .eq('estimate_id', estimateId)
+      if (fallbackErr) throw new Error(`Failed to fetch line items: ${fallbackErr.message}`)
+      lineItems = fallbackItems
+    } else if (lineItemsError) {
       throw new Error(`Failed to fetch line items: ${lineItemsError.message}`)
+    } else {
+      lineItems = liData
     }
 
     if (!lineItems || lineItems.length === 0) {
@@ -287,7 +298,8 @@ export async function regenerateProposalTotal(
     if (!proposal.estimate_id) {
       throw new Error('Proposal has no linked estimate')
     }    // Fetch line items with room exclusion filter
-    const { data: lineItems, error: lineItemsError } = await supabase
+    let lineItems: any[] | null = null
+    const { data: liData2, error: lineItemsError } = await supabase
       .from('estimate_line_items')
       .select(`
         client_price,
@@ -301,8 +313,17 @@ export async function regenerateProposalTotal(
       `)
       .eq('estimate_id', proposal.estimate_id)
 
-    if (lineItemsError) {
+    if (lineItemsError?.message?.includes('column') || lineItemsError?.message?.includes('schema cache')) {
+      const { data: fallbackItems, error: fallbackErr } = await supabase
+        .from('estimate_line_items')
+        .select('client_price, is_allowance, description, room_id')
+        .eq('estimate_id', proposal.estimate_id)
+      if (fallbackErr) throw new Error(`Failed to fetch line items: ${fallbackErr.message}`)
+      lineItems = fallbackItems
+    } else if (lineItemsError) {
       throw new Error(`Failed to fetch line items: ${lineItemsError.message}`)
+    } else {
+      lineItems = liData2
     }
 
     // Calculate new total (only in-scope rooms)

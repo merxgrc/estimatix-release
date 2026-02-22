@@ -210,6 +210,16 @@ export async function upsertRoom(input: {
       source: 'manual' as const,
     }
 
+    // Base data without Phase 1 columns — fallback if migration 033/034 not applied
+    const baseRoomData: Record<string, unknown> = {
+      project_id: input.projectId,
+      name: cleanedName,
+      type: input.type?.trim() || null,
+      area_sqft: input.area || null,
+      notes: input.notes?.trim() || null,
+      source: 'manual' as const,
+    }
+
     if (input.id) {
       // Update existing room
       // Note: DB trigger auto-computes floor_area_sqft, wall_area_sqft, ceiling_area_sqft
@@ -219,6 +229,21 @@ export async function upsertRoom(input: {
         .eq('id', input.id)
         .select()
         .single()
+
+      if (updateError?.message?.includes('column') || updateError?.message?.includes('schema cache')) {
+        console.warn('[upsertRoom] Phase 1 columns missing, falling back to base update:', updateError.message)
+        const { data: fallbackRoom, error: fallbackErr } = await supabase
+          .from('rooms')
+          .update(baseRoomData)
+          .eq('id', input.id)
+          .select()
+          .single()
+        if (fallbackErr) {
+          console.error('Error updating room (fallback):', fallbackErr)
+          return { success: false, error: `Failed to update room: ${fallbackErr.message}` }
+        }
+        return { success: true, room: fallbackRoom as Room }
+      }
 
       if (updateError) {
         console.error('Error updating room:', updateError)
@@ -233,6 +258,20 @@ export async function upsertRoom(input: {
         .insert(roomData)
         .select()
         .single()
+
+      if (insertError?.message?.includes('column') || insertError?.message?.includes('schema cache')) {
+        console.warn('[upsertRoom] Phase 1 columns missing, falling back to base insert:', insertError.message)
+        const { data: fallbackRoom, error: fallbackErr } = await supabase
+          .from('rooms')
+          .insert(baseRoomData)
+          .select()
+          .single()
+        if (fallbackErr) {
+          console.error('Error creating room (fallback):', fallbackErr)
+          return { success: false, error: `Failed to create room: ${fallbackErr.message}` }
+        }
+        return { success: true, room: fallbackRoom as Room }
+      }
 
       if (insertError) {
         console.error('Error creating room:', insertError)
@@ -323,6 +362,12 @@ export async function updateRoomDimensions(
       .eq('id', roomId)
       .select()
       .single()
+
+    if (updateError?.message?.includes('column') || updateError?.message?.includes('schema cache')) {
+      // Dimension columns don't exist yet (migration 033 not applied)
+      console.warn('[updateRoomDimensions] Dimension columns missing:', updateError.message)
+      return { success: false, error: 'Room dimensions feature requires database migration 033 to be applied.' }
+    }
 
     if (updateError || !updatedRoom) {
       console.error('Error updating room dimensions:', updateError)
@@ -475,7 +520,18 @@ export async function toggleRoomScope(
       .update({ is_in_scope: isInScope, is_active: isInScope })
       .eq('id', roomId)
 
-    if (updateError) {
+    if (updateError?.message?.includes('column') || updateError?.message?.includes('schema cache')) {
+      // is_in_scope column doesn't exist yet — fall back to just is_active
+      console.warn('[toggleRoomScope] is_in_scope column missing, using is_active only:', updateError.message)
+      const { error: fallbackErr } = await supabase
+        .from('rooms')
+        .update({ is_active: isInScope })
+        .eq('id', roomId)
+      if (fallbackErr) {
+        console.error('Error toggling room scope (fallback):', fallbackErr)
+        return { success: false, error: 'Failed to update room scope' }
+      }
+    } else if (updateError) {
       console.error('Error toggling room scope:', updateError)
       return { success: false, error: 'Failed to update room scope' }
     }
@@ -491,13 +547,24 @@ export async function toggleRoomScope(
 
       if (estimates && estimates.length > 0) {
         // 2. Get all rooms with current scope for this project
-        const { data: allRooms } = await supabase
+        const scopeMap = new Map<string, boolean>()
+        const { data: allRooms, error: allRoomsErr } = await supabase
           .from('rooms')
           .select('id, is_in_scope')
           .eq('project_id', room.project_id)
 
-        const scopeMap = new Map<string, boolean>()
-        if (allRooms) {
+        if (allRoomsErr?.message?.includes('column') || allRoomsErr?.message?.includes('schema cache')) {
+          // is_in_scope doesn't exist — fall back to is_active
+          const { data: fallbackRooms } = await supabase
+            .from('rooms')
+            .select('id, is_active')
+            .eq('project_id', room.project_id)
+          if (fallbackRooms) {
+            for (const r of fallbackRooms) {
+              scopeMap.set(r.id, (r as any).is_active ?? true)
+            }
+          }
+        } else if (allRooms) {
           for (const r of allRooms) {
             scopeMap.set(r.id, r.is_in_scope ?? true)
           }
@@ -633,7 +700,8 @@ export async function rederiveLineItemQuantity(
     const supabase = await createServerClient()
 
     // Fetch line item with room join
-    const { data: lineItem, error: liError } = await supabase
+    let lineItem: any = null
+    const { data: liData, error: liError } = await supabase
       .from('estimate_line_items')
       .select(`
         id, room_id, cost_code, unit, description, category,
@@ -645,9 +713,15 @@ export async function rederiveLineItemQuantity(
       .eq('id', lineItemId)
       .single()
 
-    if (liError || !lineItem) {
+    if (liError?.message?.includes('column') || liError?.message?.includes('schema cache')) {
+      // Area columns don't exist — this feature requires migration 033
+      return { success: false, error: 'Auto-derive feature requires room dimension columns. Please apply migration 033.' }
+    }
+
+    if (liError || !liData) {
       return { success: false, error: 'Line item not found' }
     }
+    lineItem = liData
 
     // Verify ownership
     const room = (lineItem as any).rooms as { id: string; project_id: string; floor_area_sqft: number | null; wall_area_sqft: number | null; ceiling_area_sqft: number | null } | null

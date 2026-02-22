@@ -128,7 +128,8 @@ export async function startJobFromContract(contractId: string) {
 
     // 4. Fetch all estimate_line_items from the approved estimate
     // Join with rooms to filter out excluded rooms (is_in_scope = false)
-    const { data: lineItems, error: lineItemsError } = await supabase
+    let lineItems: any[] | null = null
+    const { data: liData, error: lineItemsError } = await supabase
       .from('estimate_line_items')
       .select(`
         *,
@@ -140,8 +141,19 @@ export async function startJobFromContract(contractId: string) {
       .eq('estimate_id', estimateId)
       .order('created_at', { ascending: true })
 
-    if (lineItemsError) {
+    if (lineItemsError?.message?.includes('column') || lineItemsError?.message?.includes('schema cache')) {
+      // is_in_scope column missing — fetch without join (treat all as in-scope)
+      const { data: fallbackItems, error: fallbackErr } = await supabase
+        .from('estimate_line_items')
+        .select('*')
+        .eq('estimate_id', estimateId)
+        .order('created_at', { ascending: true })
+      if (fallbackErr) throw new Error(`Failed to fetch line items: ${fallbackErr.message}`)
+      lineItems = fallbackItems
+    } else if (lineItemsError) {
       throw new Error(`Failed to fetch line items: ${lineItemsError.message}`)
+    } else {
+      lineItems = liData
     }
 
     if (!lineItems || lineItems.length === 0) {
@@ -284,7 +296,8 @@ export async function startJobFromEstimate(projectId: string) {
 
     // 4. Fetch all estimate_line_items from the estimate
     // Join with rooms to filter out excluded rooms (is_in_scope = false)
-    const { data: lineItems, error: lineItemsError } = await supabase
+    let lineItems: any[] | null = null
+    const { data: liData2, error: lineItemsError } = await supabase
       .from('estimate_line_items')
       .select(`
         *,
@@ -296,8 +309,18 @@ export async function startJobFromEstimate(projectId: string) {
       .eq('estimate_id', estimate.id)
       .order('created_at', { ascending: true })
 
-    if (lineItemsError) {
+    if (lineItemsError?.message?.includes('column') || lineItemsError?.message?.includes('schema cache')) {
+      const { data: fallbackItems, error: fallbackErr } = await supabase
+        .from('estimate_line_items')
+        .select('*')
+        .eq('estimate_id', estimate.id)
+        .order('created_at', { ascending: true })
+      if (fallbackErr) throw new Error(`Failed to fetch line items: ${fallbackErr.message}`)
+      lineItems = fallbackItems
+    } else if (lineItemsError) {
       throw new Error(`Failed to fetch line items: ${lineItemsError.message}`)
+    } else {
+      lineItems = liData2
     }
 
     if (!lineItems || lineItems.length === 0) {

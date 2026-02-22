@@ -136,7 +136,8 @@ export async function regenerateContractTotal(
     }
 
     // Fetch line items with room exclusion filter
-    const { data: lineItems, error: lineItemsError } = await supabase
+    let lineItems: any[] | null = null
+    const { data: liData, error: lineItemsError } = await supabase
       .from('estimate_line_items')
       .select(`
         client_price,
@@ -148,8 +149,17 @@ export async function regenerateContractTotal(
       `)
       .eq('estimate_id', estimateId)
 
-    if (lineItemsError) {
+    if (lineItemsError?.message?.includes('column') || lineItemsError?.message?.includes('schema cache')) {
+      const { data: fallbackItems, error: fallbackErr } = await supabase
+        .from('estimate_line_items')
+        .select('client_price, room_id')
+        .eq('estimate_id', estimateId)
+      if (fallbackErr) throw new Error(`Failed to fetch line items: ${fallbackErr.message}`)
+      lineItems = fallbackItems
+    } else if (lineItemsError) {
       throw new Error(`Failed to fetch line items: ${lineItemsError.message}`)
+    } else {
+      lineItems = liData
     }
 
     // Calculate new total (only in-scope rooms)

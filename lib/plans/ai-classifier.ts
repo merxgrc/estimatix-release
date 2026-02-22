@@ -1094,32 +1094,39 @@ CRITICAL RULES:
       })
     }
 
+    // Log payload size for diagnostics
+    const totalBase64 = images.reduce((sum, img) => sum + img.base64.length, 0)
+    console.log(`[Vision] Sending ${images.length} image(s) to gpt-4o, total base64: ${Math.round(totalBase64 / 1024)}KB`)
+
+    const requestBody = JSON.stringify({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content }
+      ],
+      temperature: 0.3,
+      max_tokens: 4000,
+      response_format: { type: 'json_object' },
+    })
+    console.log(`[Vision] Request body size: ${Math.round(requestBody.length / 1024)}KB`)
+
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content }
-        ],
-        temperature: 0.3,
-        max_tokens: 4000,
-        response_format: { type: 'json_object' },
-      }),
+      body: requestBody,
     })
 
     if (!response.ok) {
       const errorText = await response.text()
-      console.error('[Vision] API error:', errorText)
+      console.error(`[Vision] API error (${response.status}): ${errorText.substring(0, 500)}`)
       return {
         rooms: [],
         assumptions: [],
         missingInfo: [],
-        warnings: ['Vision analysis failed. The images may be too large or unclear.'],
+        warnings: [`Vision analysis failed (HTTP ${response.status}). The images may be too large or unclear.`],
       }
     }
 

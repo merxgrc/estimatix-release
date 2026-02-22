@@ -147,10 +147,18 @@ export async function applyParsedResults(
         
         // Update scope status if room is being excluded
         if (!room.included) {
-          await supabase
+          // Try with Phase 1 column first, fall back to just is_active
+          const scopeUpdate = await supabase
             .from('rooms')
             .update({ is_in_scope: false, is_active: false })
             .eq('id', existingId)
+          
+          if (scopeUpdate.error?.message?.includes('column') || scopeUpdate.error?.message?.includes('schema cache')) {
+            await supabase
+              .from('rooms')
+              .update({ is_active: false })
+              .eq('id', existingId)
+          }
           excludedRooms++
         }
         continue
@@ -191,16 +199,36 @@ export async function applyParsedResults(
         .select('id')
         .single()
 
-      if (fullResult.error?.message?.includes('column') && fullResult.error?.message?.includes('schema cache')) {
+      if (fullResult.error?.message?.includes('column') || fullResult.error?.message?.includes('schema cache')) {
         // Phase 1 columns don't exist yet — fall back to base columns only
-        console.warn(`[ApplyParsed] Phase 1 columns missing, falling back to base insert for room "${room.name}"`)
+        console.warn(`[ApplyParsed] Phase 1 columns missing, falling back to base insert for room "${room.name}". Error: ${fullResult.error.message}`)
         const baseResult = await supabase
           .from('rooms')
           .insert(roomInsertBase)
           .select('id')
           .single()
-        newRoom = baseResult.data
-        roomError = baseResult.error
+        
+        // If base insert also fails (more unknown columns), try absolute minimal
+        if (baseResult.error?.message?.includes('column') || baseResult.error?.message?.includes('schema cache')) {
+          console.warn(`[ApplyParsed] Base room insert also failed, trying minimal. Error: ${baseResult.error.message}`)
+          const minResult = await supabase
+            .from('rooms')
+            .insert({
+              project_id: input.projectId,
+              name: room.name.trim(),
+              type: room.type?.trim() || null,
+              area_sqft: room.area_sqft || null,
+              source: 'blueprint',
+              is_active: room.included,
+            })
+            .select('id')
+            .single()
+          newRoom = minResult.data
+          roomError = minResult.error
+        } else {
+          newRoom = baseResult.data
+          roomError = baseResult.error
+        }
       } else {
         newRoom = fullResult.data
         roomError = fullResult.error
@@ -339,7 +367,7 @@ export async function applyParsedResults(
         console.log(`[ApplyParsed]   Auto-calc: "${li.description}" → room "${li.room_name}" → qty=${li.quantity} ${li.unit}`)
       }
 
-      // Try full insert first (with Phase 1 columns: level, calc_source)
+      // Try full insert first (with Phase 1 columns: level, calc_source, price_source)
       let insertedItems: { id: string }[] | null = null
       let insertError: any = null
 
@@ -348,16 +376,47 @@ export async function applyParsedResults(
         .insert(lineItemsToInsert)
         .select('id')
 
-      if (fullInsertResult.error?.message?.includes('column') && fullInsertResult.error?.message?.includes('schema cache')) {
-        // Phase 1 columns don't exist — strip them and retry
-        console.warn('[ApplyParsed] Phase 1 line item columns missing, falling back to base insert')
-        const baseLineItems = lineItemsToInsert.map(({ level: _l, calc_source: _c, ...rest }) => rest)
+      if (fullInsertResult.error?.message?.includes('column') || fullInsertResult.error?.message?.includes('schema cache')) {
+        // Phase 1 columns don't exist — strip ALL potentially missing columns and retry
+        console.warn('[ApplyParsed] Phase 1 line item columns missing, falling back to base insert. Error:', fullInsertResult.error.message)
+        const PHASE1_COLS = ['level', 'calc_source', 'price_source', 'scope_group', 'confidence', 'notes']
+        const baseLineItems = lineItemsToInsert.map(li => {
+          const base: Record<string, unknown> = {}
+          for (const [k, v] of Object.entries(li)) {
+            if (!PHASE1_COLS.includes(k)) base[k] = v
+          }
+          return base
+        })
         const baseResult = await supabase
           .from('estimate_line_items')
           .insert(baseLineItems)
           .select('id')
-        insertedItems = baseResult.data
-        insertError = baseResult.error
+
+        // If it STILL fails (more unknown columns), try absolute minimal insert
+        if (baseResult.error?.message?.includes('column') || baseResult.error?.message?.includes('schema cache')) {
+          console.warn('[ApplyParsed] Base insert also failed, trying minimal insert. Error:', baseResult.error.message)
+          const minimalLineItems = lineItemsToInsert.map(li => ({
+            estimate_id: li.estimate_id,
+            project_id: li.project_id,
+            room_id: li.room_id,
+            room_name: li.room_name,
+            description: li.description,
+            category: li.category,
+            cost_code: li.cost_code,
+            quantity: li.quantity,
+            unit: li.unit,
+            is_active: true,
+          }))
+          const minResult = await supabase
+            .from('estimate_line_items')
+            .insert(minimalLineItems)
+            .select('id')
+          insertedItems = minResult.data
+          insertError = minResult.error
+        } else {
+          insertedItems = baseResult.data
+          insertError = baseResult.error
+        }
       } else {
         insertedItems = fullInsertResult.data
         insertError = fullInsertResult.error

@@ -33,7 +33,8 @@ export async function getEstimationAccuracy() {
     const accuracyData = await Promise.all(
       projects.map(async (project) => {
         // Fetch line items WITH room scope join to filter excluded rooms
-        const { data: lineItems, error: itemsError } = await supabase
+        let lineItems: any[] | null = null
+        const { data: liData, error: itemsError } = await supabase
           .from('estimate_line_items')
           .select(`
             direct_cost, client_price, room_id,
@@ -45,9 +46,19 @@ export async function getEstimationAccuracy() {
           .eq('project_id', project.id)
           .eq('is_active', true)
 
-        if (itemsError) {
+        if (itemsError?.message?.includes('column') || itemsError?.message?.includes('schema cache')) {
+          // is_in_scope column missing — fall back without join (treat all as in-scope)
+          const { data: fallbackItems } = await supabase
+            .from('estimate_line_items')
+            .select('direct_cost, client_price, room_id')
+            .eq('project_id', project.id)
+            .eq('is_active', true)
+          lineItems = fallbackItems
+        } else if (itemsError) {
           console.error(`Error fetching line items for project ${project.id}:`, itemsError)
           return null
+        } else {
+          lineItems = liData
         }
 
         // Only include items from in-scope rooms (or items without a room)

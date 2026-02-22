@@ -303,19 +303,57 @@ export async function POST(req: NextRequest) {
         // PDF processing with 2-pass approach
         try {
           // Download PDF
-          console.log(`[Plans Parse] Downloading: uploads/${storagePath}`)
+          console.log(`[Plans Parse] ─── Downloading: uploads/${storagePath}`)
+          const dlStart = Date.now()
           const { data: fileData, error: downloadError } = await serviceSupabase.storage
             .from('uploads')
             .download(storagePath)
 
+          // DEBUG: Log fetch result immediately
+          if (downloadError) {
+            console.error('[parse] Download error:', downloadError)
+            console.error('[parse] Error code:', downloadError.statusCode || 'N/A')
+            console.error('[parse] Error message:', downloadError.message)
+          }
+          
           if (downloadError || !fileData) {
-            console.error('[Plans Parse] Download failed:', downloadError?.message || 'No data returned')
+            console.error('[Plans Parse] Download FAILED:', downloadError?.message || 'No data returned')
             allWarnings.push(`Failed to download file: ${storagePath.split('/').pop()}`)
             continue
           }
 
+          // DEBUG: Log file metadata before converting to buffer
+          console.log('[parse] Blob type (content-type):', fileData.type || 'N/A')
+          console.log('[parse] Blob size:', fileData.size || 'N/A')
+
           const buffer = Buffer.from(await fileData.arrayBuffer())
-          console.log(`[Plans Parse] Downloaded ${Math.round(buffer.length / 1024)}KB PDF`)
+          
+          // DEBUG: Log buffer details immediately after conversion
+          console.log('[parse] Buffer size (bytes):', buffer.length)
+          console.log('[parse] Buffer head (first 8 bytes as UTF-8):', buffer.slice(0, 8).toString('utf8'))
+          console.log('[parse] Buffer head (first 8 bytes as hex):', buffer.slice(0, 8).toString('hex'))
+          console.log('[parse] Buffer head (first 8 bytes as ASCII):', buffer.slice(0, 8).toString('ascii'))
+          
+          // DEBUG: Validate buffer is not empty or suspiciously small
+          if (buffer.length === 0) {
+            console.error('[parse] ERROR: Buffer is EMPTY!')
+            allWarnings.push(`Downloaded file is empty: ${storagePath.split('/').pop()}`)
+            continue
+          }
+          if (buffer.length < 100) {
+            console.warn('[parse] WARNING: Buffer is suspiciously small (< 100 bytes). First 50 bytes:', buffer.toString('hex'))
+          }
+          
+          const isPdfHeader = buffer.length >= 5 && buffer.toString('ascii', 0, 5) === '%PDF-'
+          console.log(`[Plans Parse] Downloaded ${Math.round(buffer.length / 1024)}KB, content-type=${fileData.type}, isPDF=${isPdfHeader} (${Date.now() - dlStart}ms)`)
+          
+          if (!isPdfHeader) {
+            console.error(`[parse] ERROR: File does NOT start with %PDF- header!`)
+            console.error(`[parse] First 16 bytes (hex): ${buffer.toString('hex', 0, 16)}`)
+            console.error(`[parse] First 16 bytes (ASCII): ${buffer.toString('ascii', 0, 16)}`)
+            allWarnings.push(`File does not appear to be a valid PDF: ${storagePath.split('/').pop()}`)
+            continue
+          }
           
           // =====================================================
           // PASS 1: Document Map / Page Classification
@@ -332,7 +370,7 @@ export async function POST(req: NextRequest) {
           // Detect PDF type: vector / scanned / mixed
           const fileBuffer = buffer
           const pdfType = detectPdfType(extractionResult, fileBuffer.length)
-          console.log(`[Plans Parse] PDF type: ${pdfType.type} (text ratio ${(pdfType.textRatio * 100).toFixed(0)}%, ${pdfType.totalPages} pages, ${Math.round(fileBuffer.length / 1024)}KB)`)
+          console.log(`[Plans Parse] PDF type: ${pdfType.type} (text ratio ${(pdfType.textRatio * 100).toFixed(0)}%, ${pdfType.pagesWithText}/${pdfType.totalPages} pages with text, ${Math.round(fileBuffer.length / 1024)}KB)`)
           
           // Check if PDF is scanned (minimal text)
           const isScanned = pdfType.type === 'scanned'
@@ -361,13 +399,14 @@ export async function POST(req: NextRequest) {
 
               // Select pages likely to contain floor plans (typically pages 2-4)
               const pagesToRender = selectPagesForVisionAnalysis(effectiveTotalPages, 3)
-              console.log(`[Plans Parse] Rendering pages ${pagesToRender.join(', ')} for vision analysis`)
+              console.log(`[Plans Parse] Rendering pages [${pagesToRender.join(', ')}] for vision analysis`)
               
-              // Render pages to images
-              const renderedPages = await renderPdfPagesToImages(buffer, pagesToRender, 1.5)
+              // Render pages to images (scale 1.0 — keeps images under 4MB per page)
+              const renderedPages = await renderPdfPagesToImages(buffer, pagesToRender, 1.0)
               
               if (renderedPages.length > 0) {
-                console.log(`[Plans Parse] Successfully rendered ${renderedPages.length} pages, sending to vision AI`)
+                const totalImgSize = renderedPages.reduce((sum, p) => sum + p.base64.length, 0)
+                console.log(`[Plans Parse] Rendered ${renderedPages.length} pages, total image payload: ${Math.round(totalImgSize / 1024)}KB, sending to vision AI`)
                 
                 // Analyze with vision AI
                 const visionResult = await analyzeBase64ImagesForRooms(renderedPages, openaiApiKey)
@@ -380,12 +419,14 @@ export async function POST(req: NextRequest) {
                   allAssumptions.push(`Analyzed ${renderedPages.length} rendered page(s) using vision AI`)
                   continue // Skip text-based processing - vision succeeded
                 } else {
+                  console.warn('[Plans Parse] Vision AI returned 0 rooms from rendered pages')
                   allWarnings.push('Vision analysis did not detect rooms from rendered pages.')
                   allMissingInfo.push('Floor plan pages may be cover sheets, notes, or unclear images')
                 }
               } else {
+                console.warn('[Plans Parse] renderPdfPagesToImages returned 0 pages')
                 // FALLBACK: use the Supabase public URL directly with vision AI
-                console.log('[Plans Parse] Local rendering failed, trying direct URL vision analysis')
+                console.log('[Plans Parse] Trying direct URL vision analysis as fallback...')
                 try {
                   const { data: { publicUrl } } = serviceSupabase.storage
                     .from('uploads')
@@ -404,12 +445,13 @@ export async function POST(req: NextRequest) {
                     }
                   }
                 } catch (urlVisionErr) {
-                  console.warn('[Plans Parse] URL-based vision also failed:', urlVisionErr)
+                  console.warn('[Plans Parse] URL-based vision also failed:', urlVisionErr instanceof Error ? urlVisionErr.message : urlVisionErr)
                 }
                 allWarnings.push('Could not render PDF pages to images for vision analysis.')
               }
             } catch (visionError) {
-              console.warn('[Plans Parse] Vision analysis failed for scanned PDF:', visionError)
+              console.warn('[Plans Parse] Vision analysis failed for scanned PDF:', visionError instanceof Error ? visionError.message : visionError)
+              if (visionError instanceof Error) console.warn('[Plans Parse] vision stack:', visionError.stack)
               allWarnings.push('Vision analysis unavailable for scanned PDF.')
             }
             
@@ -539,7 +581,7 @@ export async function POST(req: NextRequest) {
               
               if (imageOnlyPages.length > 0) {
                 allWarnings.push(`Mixed PDF: text extraction found no rooms. Trying vision on ${imageOnlyPages.length} image-only page(s).`)
-                const rendered = await renderPdfPagesToImages(buffer, imageOnlyPages, 1.5)
+                const rendered = await renderPdfPagesToImages(buffer, imageOnlyPages, 1.0)
                 
                 if (rendered.length > 0) {
                   const visionResult = await analyzeBase64ImagesForRooms(rendered, openaiApiKey)

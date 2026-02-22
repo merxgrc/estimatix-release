@@ -72,7 +72,8 @@ export async function GET(
       if (proposal && proposal.estimate_id) {
         // Fetch line items from the estimate (exclude allowances)
         // Join with rooms to filter out excluded rooms (is_in_scope = false)
-        const { data: lineItemsData } = await supabase
+        let lineItemsData: any[] | null = null
+        const { data: liData, error: liErr } = await supabase
           .from('estimate_line_items')
           .select(`
             description, 
@@ -85,6 +86,18 @@ export async function GET(
           `)
           .eq('estimate_id', proposal.estimate_id)
           .order('created_at', { ascending: true })
+
+        if (liErr?.message?.includes('column') || liErr?.message?.includes('schema cache')) {
+          // is_in_scope missing — fetch without join
+          const { data: fallbackItems } = await supabase
+            .from('estimate_line_items')
+            .select('description, is_allowance, room_id')
+            .eq('estimate_id', proposal.estimate_id)
+            .order('created_at', { ascending: true })
+          lineItemsData = fallbackItems
+        } else {
+          lineItemsData = liData
+        }
 
         if (lineItemsData && lineItemsData.length > 0) {
           // Filter out allowances, empty descriptions, and excluded rooms

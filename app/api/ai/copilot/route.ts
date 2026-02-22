@@ -1435,7 +1435,17 @@ async function executeActions(
             .update({ is_in_scope: false, is_active: false })
             .eq('id', matchedRoom.id)
 
-          if (updateError) {
+          if (updateError?.message?.includes('column') || updateError?.message?.includes('schema cache')) {
+            // is_in_scope missing — fall back to just is_active
+            const { error: fallbackErr } = await supabase
+              .from('rooms')
+              .update({ is_active: false })
+              .eq('id', matchedRoom.id)
+            if (fallbackErr) {
+              results.push({ type: 'hide_room', success: false, error: `Failed to hide room: ${fallbackErr.message}` })
+              break
+            }
+          } else if (updateError) {
             results.push({ type: 'hide_room', success: false, error: `Failed to hide room: ${updateError.message}` })
             break
           }
